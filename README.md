@@ -3,11 +3,11 @@
 **Type a topic, get a narrated documentary.** DocuGen AI chains five open AI models on serverless GPUs. They write,
 narrate, illustrate and animate a 1–3 minute documentary, which FFmpeg then cuts with captions and a music score.
 
-**Live demo:** _add your Modal URL here_ (access code required, limited number of films per day)
+**Live demo:** https://nimeshgoyal02--docugen.modal.run (access code required, limited number of films per day)
 
 | Step | Model | Runs on |
 |---|---|---|
-| Script (title, scenes, shot list) | Llama 3.3 70B via Groq | Groq API (free tier) |
+| Script (title, scenes, shot list) | Best available Groq LLM (Llama 3.3 70B / GPT-OSS 120B) | Groq API (free tier) |
 | Narration | XTTS-v2 (Coqui) | Modal T4 GPU |
 | Scene images | Juggernaut XL (SDXL) | Modal L4 GPU |
 | Animated hero shots | LTX-Video (image-to-video) | Modal L40S GPU |
@@ -18,7 +18,7 @@ narrate, illustrate and animate a 1–3 minute documentary, which FFmpeg then cu
 flowchart LR
     U[Browser] -->|topic| W[FastAPI web app<br/>Modal]
     W -->|spawn| O[Orchestrator<br/>Modal CPU]
-    O --> S[Script<br/>Llama 3.3 70B]
+    O --> S[Script<br/>Groq LLM]
     S --> V[Voice<br/>XTTS-v2 · T4]
     S --> I[Images<br/>Juggernaut XL · L4]
     I --> M[Motion<br/>LTX-Video · L40S]
