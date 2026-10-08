@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DocuGen AI</title>
-<meta name="description" content="Type a topic, get a narrated AI documentary. Groq LLM + XTTS-v2 + Juggernaut XL + LTX-Video on serverless GPUs.">
+<meta name="description" content="Type a topic, get a narrated AI documentary. GPT-OSS + Kokoro + Z-Image Turbo + Wan 2.2 on serverless GPUs.">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23E8B04B'/><rect x='7' y='10' width='18' height='12' rx='2' fill='%230A0C10'/><circle cx='16' cy='16' r='3' fill='%23E8B04B'/></svg>">
 </head>
@@ -20,8 +20,8 @@
   <div class="hero">
     <p class="eyebrow">Multi-model generative pipeline &middot; serverless GPUs</p>
     <h1>Type a topic.<br><em>Get a documentary.</em></h1>
-    <p class="lede">An LLM writes the script, XTTS-v2 narrates it, Juggernaut XL paints every scene, LTX-Video
-      brings the key shots to life and FFmpeg cuts it all together, with captions and a music score.</p>
+    <p class="lede">An LLM writes the script, Kokoro narrates it, Z-Image Turbo paints every shot, Wan 2.2 brings
+      the key shots to life and FFmpeg cuts it all together with moving camera work, captions and a music score.</p>
   </div>
 
   <form id="form" class="panel" autocomplete="off">
@@ -45,20 +45,27 @@
       </div>
     </div>
 
+    <div class="row2">
+      <div>
+        <span class="lbl">Scenes <output id="sceneCountOut">6</output></span>
+        <input type="range" id="sceneCount" min="3" max="12" value="6">
+        <small class="hint">Each scene is cut into ~3 s shots, so the picture changes often.</small>
+      </div>
+      <div>
+        <span class="lbl">Animated hero shots <output id="motionOut">2</output></span>
+        <input type="range" id="motion" min="0" max="6" value="2">
+        <small class="hint">5 s Wan 2.2 video clips that open those scenes. The rest use Ken Burns moves.</small>
+      </div>
+    </div>
+
     <span class="lbl">Visual style</span>
     <div class="styles" id="styles"></div>
 
-    <div class="row2">
-      <div>
-        <span class="lbl">Animated hero shots <output id="motionOut">3</output></span>
-        <input type="range" id="motion" min="0" max="4" value="3">
-        <small class="hint">Each one is a ~5 s LTX-Video clip. Others use slow Ken Burns moves.</small>
-      </div>
-      <div class="toggles">
-        <label class="toggle"><input type="checkbox" id="music" checked><span></span>Music score</label>
-        <label class="toggle"><input type="checkbox" id="subtitles" checked><span></span>Burned-in captions</label>
-      </div>
+    <div class="toggles inline">
+      <label class="toggle"><input type="checkbox" id="music" checked><span></span>Music score</label>
+      <label class="toggle"><input type="checkbox" id="subtitles" checked><span></span>Burned-in captions</label>
     </div>
+    <p class="estimate" id="estimate"></p>
 
     <div id="codeRow" class="hidden">
       <label class="lbl" for="code">Access code</label>
@@ -72,10 +79,10 @@
 
   <ol class="models">
     <li><b>Script</b><span>GPT-OSS 120B &middot; Groq</span></li>
-    <li><b>Voice</b><span>XTTS-v2</span></li>
-    <li><b>Images</b><span>Juggernaut XL</span></li>
-    <li><b>Motion</b><span>LTX-Video</span></li>
-    <li><b>Captions</b><span>faster-whisper</span></li>
+    <li><b>Voice</b><span>Kokoro-82M</span></li>
+    <li><b>Images</b><span>Z-Image Turbo</span></li>
+    <li><b>Motion</b><span>Wan 2.2 I2V</span></li>
+    <li><b>Captions</b><span>TTS word timing</span></li>
     <li><b>Edit</b><span>FFmpeg</span></li>
   </ol>
 

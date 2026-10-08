@@ -125,3 +125,14 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: 10px
   .stages { grid-template-columns: 1fr 1fr; }
   .jobhead { flex-direction: column; gap: 4px; }
 }
+.toggles.inline { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 18px; }
+.estimate { color: var(--muted); font-size: 13px; margin: 14px 0 0; }
+.estimate b { color: var(--text); font-weight: 600; }
+.scene .strip { display: flex; gap: 4px; padding: 6px 8px 0; overflow-x: auto; }
+.scene .strip img { position: static; width: 54px; height: 30px; object-fit: cover; border-radius: 4px; flex: none; opacity: .85; }
+@media (max-width: 720px) {
+  .row2 { grid-template-columns: 1fr; gap: 0; }
+  .styles { grid-template-columns: repeat(2, 1fr); }
+  .models { grid-template-columns: repeat(3, 1fr); }
+  .stages { grid-template-columns: 1fr; }
+}

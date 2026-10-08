@@ -6,7 +6,7 @@ const SWATCH = {
   painterly: "linear-gradient(120deg,#30406b,#c25f4f,#e8c46a)", noir: "linear-gradient(120deg,#05070a,#3a4250)",
 };
 let cfg = null, timer = null, current = null;
-const pick = { seconds: 120, style: "cinematic" };
+const pick = { seconds: 60, style: "cinematic" };
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -27,29 +27,48 @@ async function loadConfig() {
     `<button type="button" data-s="${s}" class="${+s === pick.seconds ? "on" : ""}">${esc(l)}</button>`).join("");
   $("#styles").innerHTML = Object.entries(cfg.styles).map(([k, l]) =>
     `<button type="button" class="style ${k === pick.style ? "on" : ""}" data-k="${k}" style="--sw:${SWATCH[k] || "#333"}">${esc(l)}</button>`).join("");
-  $("#voice").innerHTML = Object.entries(cfg.voices).map(([k, l]) => `<option value="${esc(k)}">${esc(l)} (${esc(k)})</option>`).join("");
+  $("#voice").innerHTML = Object.entries(cfg.voices).map(([k, l]) =>
+    `<option value="${esc(k)}" ${k === cfg.default_voice ? "selected" : ""}>${esc(l)}</option>`).join("");
+  $("#sceneCount").min = cfg.scenes.min; $("#sceneCount").max = cfg.scenes.max;
+  setScenes(cfg.scenes.default[pick.seconds] || 6);
   $("#codeRow").classList.toggle("hidden", !cfg.access_required);
   const left = Math.max(0, cfg.daily_limit - cfg.used_today);
-  $("#quota").textContent = `${left} of ${cfg.daily_limit} free documentaries left today · takes about 6–10 minutes`;
+  $("#quota").textContent = `${left} of ${cfg.daily_limit} documentaries left today`;
 }
 $("#lengths").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   pick.seconds = +b.dataset.s;
   [...$("#lengths").children].forEach((x) => x.classList.toggle("on", x === b));
+  if (cfg) setScenes(cfg.scenes.default[pick.seconds] || +$("#sceneCount").value);
 });
+function setScenes(n) {
+  $("#sceneCount").value = n; $("#sceneCountOut").textContent = n;
+  const maxHero = Math.min(n, cfg ? cfg.max_heroes : 6);
+  $("#motion").max = maxHero;
+  if (+$("#motion").value > maxHero) $("#motion").value = maxHero;
+  $("#motionOut").textContent = $("#motion").value;
+  estimate();
+}
+function estimate() {
+  const shots = Math.max(+$("#sceneCount").value, Math.round(pick.seconds / 3.2));
+  const heroes = +$("#motion").value;
+  const mins = Math.max(2, Math.round(1.2 + pick.seconds / 60 + heroes * 0.25));
+  $("#estimate").innerHTML = `About <b>${shots} shots</b>, ${heroes} animated &middot; ready in roughly <b>${mins}–${mins + 2} minutes</b> (first film of the day takes longer while the GPUs load the models)`;
+}
+$("#sceneCount").addEventListener("input", () => setScenes(+$("#sceneCount").value));
 $("#styles").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   pick.style = b.dataset.k;
   [...$("#styles").children].forEach((x) => x.classList.toggle("on", x === b));
 });
 $("#chips").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) $("#topic").value = b.textContent; });
-$("#motion").addEventListener("input", () => { $("#motionOut").textContent = $("#motion").value; });
+$("#motion").addEventListener("input", () => { $("#motionOut").textContent = $("#motion").value; estimate(); });
 
 $("#form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#formErr"); err.classList.add("hidden");
   const body = {
-    topic: $("#topic").value.trim(), seconds: pick.seconds, style: pick.style, voice: $("#voice").value,
+    topic: $("#topic").value.trim(), seconds: pick.seconds, scenes: +$("#sceneCount").value, style: pick.style, voice: $("#voice").value,
     motion: +$("#motion").value, music: $("#music").checked, subtitles: $("#subtitles").checked, code: $("#code").value,
   };
   if (body.topic.length < 3) { err.textContent = "Please type a topic."; err.classList.remove("hidden"); return; }
@@ -97,7 +116,7 @@ function render(job) {
     let el = box.children[i];
     if (!el) {
       el = document.createElement("div"); el.className = "scene";
-      el.innerHTML = `<div class="media"><span class="tag">Scene ${i + 1}</span></div><p></p>`;
+      el.innerHTML = `<div class="media"><span class="tag">Scene ${i + 1}</span></div><div class="strip"></div><p></p>`;
       box.appendChild(el);
     }
     el.querySelector("p").textContent = s.narration;
@@ -106,9 +125,12 @@ function render(job) {
       media.dataset.img = 1; media.classList.add("ready");
       media.insertAdjacentHTML("afterbegin", `<img src="${fileUrl(job.id, s.image)}" alt="">`);
     }
+    const strip = el.querySelector(".strip");
+    (s.shots || []).slice(strip.children.length).forEach((p) =>
+      strip.insertAdjacentHTML("beforeend", `<img loading="lazy" src="${fileUrl(job.id, p)}" alt="">`));
     if (s.motion && !media.dataset.mov) {
       media.dataset.mov = 1;
-      media.insertAdjacentHTML("beforeend", `<video src="${fileUrl(job.id, s.motion)}" poster="${s.image ? fileUrl(job.id, s.image) : ""}" muted loop playsinline autoplay preload="auto"></video><span class="tag motion">LTX motion</span>`);
+      media.insertAdjacentHTML("beforeend", `<video src="${fileUrl(job.id, s.motion)}" poster="${s.image ? fileUrl(job.id, s.image) : ""}" muted loop playsinline autoplay preload="auto"></video><span class="tag motion">Wan 2.2 motion</span>`);
     }
   });
 
