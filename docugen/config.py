@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 # --------------------------------------------------------------------------- models
-LLM_MODEL = os.environ.get("DOCUGEN_LLM_MODEL", "llama-3.3-70b-versatile")   # Groq
+LLM_MODEL = os.environ.get("DOCUGEN_LLM_MODEL", "openai/gpt-oss-120b")   # Groq (falls back automatically, see script.py)
 IMAGE_MODEL = os.environ.get("DOCUGEN_IMAGE_MODEL", "RunDiffusion/Juggernaut-XL-v9")
 VIDEO_MODEL = os.environ.get("DOCUGEN_VIDEO_MODEL", "Lightricks/LTX-Video")
 TTS_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"

@@ -1,6 +1,6 @@
 """The documentary pipeline. Each stage starts automatically when the previous one finishes.
 
-    script  -> Groq Llama 3.3 70B writes title, logline and scenes (JSON, validated)
+    script  -> Groq LLM (GPT-OSS 120B) writes title, logline and scenes (JSON, validated)
     voice   -> XTTS-v2 narrates every scene            } run in parallel
     images  -> Juggernaut XL paints every scene        }
     motion  -> LTX-Video animates the 'hero' scenes (falls back to Ken Burns on failure)
@@ -26,7 +26,7 @@ from .music import make_music
 from .script import to_markdown
 
 STAGES = [
-    ("script", "Writing the script (Llama 3.3 70B)", 6),
+    ("script", "Writing the script (Groq LLM)", 6),
     ("voice", "Recording narration (XTTS-v2)", 14),
     ("images", "Painting the scenes (Juggernaut XL)", 25),
     ("motion", "Animating hero shots (LTX-Video)", 25),
