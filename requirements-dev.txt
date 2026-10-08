@@ -1,0 +1,9 @@
+# local tests + `python -m docugen.dev` (fake CPU backend, no GPU needed)
+modal>=1.6,<1.7
+fastapi>=0.110
+uvicorn>=0.29
+pillow>=10.4
+numpy>=1.26
+openai>=1.40
+pytest>=8.0
+httpx>=0.27
