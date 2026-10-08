@@ -62,7 +62,7 @@ MAX_MOTION_GPUS = 4
 
 # --------------------------------------------------------------------------- GPU services
 @app.cls(image=gpu_image, gpu="L40S", volumes={"/cache": cache_vol}, timeout=900, scaledown_window=120,
-         max_containers=MAX_IMAGE_GPUS, memory=32768)
+         max_containers=MAX_IMAGE_GPUS, memory=49152)
 class ImageGPU:
     @modal.enter()
     def load(self):
