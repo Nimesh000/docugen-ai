@@ -1,4 +1,4 @@
-"""Captions: faster-whisper word timestamps on the narration track -> SRT + styled ASS."""
+"""Captions: group timed words into readable cues -> SRT + styled ASS (optional faster-whisper alignment)."""
 from __future__ import annotations
 
 from pathlib import Path

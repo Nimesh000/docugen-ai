@@ -10,31 +10,36 @@ from . import config
 
 SYSTEM_PROMPT = """You are an award-winning documentary writer and director.
 Write a short narrated documentary as JSON. Rules:
-- Narration is calm, vivid and factual. Use only well-established facts; avoid precise numbers unless you are sure.
-- Scene 1 is a hook that makes the viewer curious. The last scene closes the story with a reflective line.
-- Each scene has one continuous narration paragraph (no headings, no stage directions, no emojis).
-- "visual" describes ONE concrete photograph for an image generator: subject, setting, lighting, camera angle.
-  Never ask for text, logos, brand names, screens with readable words, or recognisable real people.
-- "motion" describes subtle camera or subject movement for that shot (e.g. "slow push in, people walking past").
+- Narration is vivid, confident and factual, with concrete, well-established details: key years, places,
+  institutions, inventions, turning points. No vague filler ("a quiet revolution began"). If unsure of a number, leave it out.
+- Scene 1 is a strong hook. Each scene moves the story forward. The last scene closes with a memorable line.
+- Each scene has one narration paragraph of plain spoken sentences (no headings, stage directions, emojis or lists).
+- "shots" are 4 different photographs that illustrate that scene's narration, in order: wide establishing shot,
+  medium shot, close-up detail, and another angle. Each is ONE concrete image description for an image generator:
+  subject, action, setting, era, lighting, camera angle, lens. Be specific (people's clothing, objects, place).
+  Never ask for readable text, logos, brand names, user interfaces or recognisable real people.
+- "motion" describes how the FIRST shot comes alive as a 5 second video: what moves (people walking, steam rising,
+  hands tapping a phone) and the camera move (slow dolly in, pan left). One sentence.
 - Mark exactly the requested number of the most visually dynamic scenes with "hero": true.
 Return ONLY this JSON:
 {"title": "...", "logline": "one sentence", "scenes": [
-  {"narration": "...", "visual": "...", "motion": "...", "hero": false}
+  {"narration": "...", "shots": ["...", "...", "...", "..."], "motion": "...", "hero": false}
 ]}"""
 
 
-def targets(seconds: int) -> tuple[int, int]:
+def targets(seconds: int, scenes: int | None = None) -> tuple[int, int]:
     """(number of scenes, total narration words) for a target length."""
-    scenes = max(5, min(14, round(seconds / 13)))
-    words = int(seconds * config.WORDS_PER_SECOND)
-    return scenes, words
+    n = scenes or config.default_scenes(seconds)
+    n = max(config.MIN_SCENES, min(config.MAX_SCENES, int(n)))
+    narration_seconds = max(10, seconds - 2 * config.CARD_SECONDS)
+    return n, int(narration_seconds * config.WORDS_PER_SECOND)
 
 
-def user_prompt(topic: str, seconds: int, heroes: int) -> str:
-    n, words = targets(seconds)
+def user_prompt(topic: str, seconds: int, heroes: int, scenes: int | None = None) -> str:
+    n, words = targets(seconds, scenes)
     return (f"Topic: {topic}\n"
-            f"Length: about {seconds} seconds of narration = about {words} words in total.\n"
-            f"Write exactly {n} scenes of roughly {words // n} words each.\n"
+            f"Length: about {seconds} seconds = about {words} words of narration in total.\n"
+            f"Write exactly {n} scenes of roughly {max(8, words // n)} words each.\n"
             f"Mark {heroes} scenes as hero.")
 
 
@@ -44,7 +49,7 @@ def _clean(text: str) -> str:
     return text.replace("*", "").replace("#", "")
 
 
-def normalize(data: dict, topic: str, heroes: int) -> dict:
+def normalize(data: dict, topic: str, heroes: int, max_scenes: int = 16) -> dict:
     """Validate the LLM output and repair what can be repaired. Raises ValueError if unusable."""
     if not isinstance(data, dict) or not isinstance(data.get("scenes"), list):
         raise ValueError("JSON has no 'scenes' list")
@@ -53,18 +58,21 @@ def normalize(data: dict, topic: str, heroes: int) -> dict:
         if not isinstance(s, dict):
             continue
         narration = _clean(s.get("narration"))
-        visual = _clean(s.get("visual"))
-        if len(narration.split()) < 4 or not visual:
+        raw_shots = s.get("shots") if isinstance(s.get("shots"), list) else []
+        shots = [_clean(v)[:400] for v in raw_shots + [s.get("visual")] if isinstance(v, str) and _clean(v)]
+        if len(narration.split()) < 4 or not shots:
             continue
         scenes.append({
             "narration": narration[:900],
-            "visual": visual[:400],
-            "motion": _clean(s.get("motion")) or "slow cinematic push in",
+            "shots": shots[:config.MAX_SHOTS_PER_SCENE],
+            "visual": shots[0],
+            "motion": _clean(s.get("motion")) or "subtle natural movement, slow cinematic dolly in",
             "hero": bool(s.get("hero", False)),
         })
     if len(scenes) < 3:
         raise ValueError(f"only {len(scenes)} usable scenes")
-    scenes = scenes[:16]
+    scenes = scenes[:max_scenes]
+    heroes = max(0, min(heroes, len(scenes)))
 
     # exactly `heroes` hero scenes: keep the LLM's picks, then fill evenly spaced ones
     flagged = [i for i, s in enumerate(scenes) if s["hero"]][:heroes]
@@ -126,9 +134,9 @@ def _complete(client, model, messages):
     """One chat call. Reasoning models get low effort; JSON mode is dropped if the model rejects it."""
     import openai
 
-    kwargs = dict(model=model, temperature=0.7, messages=messages, max_tokens=8000)
+    kwargs = dict(model=model, temperature=0.7, messages=messages, max_tokens=12000)
     if "gpt-oss" in model or "qwen3" in model:
-        kwargs["extra_body"] = {"reasoning_effort": "low" if "gpt-oss" in model else "none"}
+        kwargs["extra_body"] = {"reasoning_effort": "medium" if "gpt-oss" in model else "none"}
     try:
         return client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
     except openai.BadRequestError:
@@ -136,7 +144,7 @@ def _complete(client, model, messages):
         return client.chat.completions.create(**kwargs)
 
 
-def write_script(topic: str, seconds: int, heroes: int, log=print) -> dict:
+def write_script(topic: str, seconds: int, heroes: int, log=print, scenes: int | None = None) -> dict:
     from openai import OpenAI
 
     key = os.environ.get("GROQ_API_KEY", "").strip()
@@ -145,14 +153,14 @@ def write_script(topic: str, seconds: int, heroes: int, log=print) -> dict:
     client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", max_retries=5, timeout=90)
     model = pick_model(client, log)
     log(f"Script model: {model} (Groq)")
-    _, words = targets(seconds)
+    n, words = targets(seconds, scenes)
     messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt(topic, seconds, heroes)}]
+                {"role": "user", "content": user_prompt(topic, seconds, heroes, n)}]
     last_err = None
     for attempt in range(1, 4):
         try:
             resp = _complete(client, model, messages)
-            script = normalize(parse_json(resp.choices[0].message.content), topic, heroes)
+            script = normalize(parse_json(resp.choices[0].message.content), topic, heroes, n)
             total = sum(len(s["narration"].split()) for s in script["scenes"])
             log(f"Script attempt {attempt}: {len(script['scenes'])} scenes, {total} words (target {words})")
             if total < words * 0.6 and attempt < 3:
@@ -172,6 +180,9 @@ def write_script(topic: str, seconds: int, heroes: int, log=print) -> dict:
 def to_markdown(script: dict) -> str:
     lines = [f"# {script['title']}", "", f"_{script['logline']}_", ""]
     for s in script["scenes"]:
-        lines += [f"## Scene {s['id'] + 1}" + (" (motion)" if s["hero"] else ""), "", s["narration"], "",
-                  f"**Visual:** {s['visual']}", ""]
+        lines += [f"## Scene {s['id'] + 1}" + (" (animated)" if s["hero"] else ""), "", s["narration"], ""]
+        lines += [f"- **Shot {k + 1}:** {v}" for k, v in enumerate(s.get("shots") or [s["visual"]])]
+        if s["hero"]:
+            lines.append(f"- **Motion:** {s['motion']}")
+        lines.append("")
     return "\n".join(lines)
