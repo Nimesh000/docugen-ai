@@ -181,17 +181,22 @@ def _run(params, root: Path, backend: Backend, status: Status) -> None:
 
     # ------------------------------------------------------------------ 2. narration (CPU, fast)
     status.stage("voice", "running")
-    padded, scene_words = [], []
-    for i, (wav, words) in enumerate(backend.narrate([s["narration"] for s in scenes], params["voice"],
-                                                     config.SPEECH_SPEED)):
-        raw = scenes_dir / f"scene_{i:02d}.wav"
-        raw.write_bytes(wav)
-        dst = work / f"narr_{i:02d}.wav"
-        padded.append((dst, media.pad_narration(raw, dst)))
-        scene_words.append(words)
-        status.stage("voice", "running", (i + 1) / n)
-    narration_len = sum(d for _, d in padded)
-    status.log(f"Narration: {narration_len:.1f} s for {n} scenes")
+    target = max(10.0, seconds - 2 * config.CARD_SECONDS)
+    speed = config.SPEECH_SPEED
+    for attempt in range(2):
+        padded, scene_words = [], []
+        for i, (wav, words) in enumerate(backend.narrate([s["narration"] for s in scenes], params["voice"], speed)):
+            raw = scenes_dir / f"scene_{i:02d}.wav"
+            raw.write_bytes(wav)
+            dst = work / f"narr_{i:02d}.wav"
+            padded.append((dst, media.pad_narration(raw, dst)))
+            scene_words.append(words)
+            status.stage("voice", "running", (i + 1) / n)
+        narration_len = sum(d for _, d in padded)
+        status.log(f"Narration: {narration_len:.1f} s for {n} scenes at speed {speed:.2f} (target {target:.0f} s)")
+        if attempt or narration_len <= target * 1.12 or speed >= config.MAX_SPEECH_SPEED:
+            break
+        speed = min(config.MAX_SPEECH_SPEED, speed * narration_len / target)   # keep the film to its length
     status.stage("voice", "done")
 
     # ------------------------------------------------------------------ 3. shot plan

@@ -61,8 +61,8 @@ MAX_MOTION_GPUS = 4
 
 
 # --------------------------------------------------------------------------- GPU services
-@app.cls(image=gpu_image, gpu="L40S", volumes={"/cache": cache_vol}, timeout=900, scaledown_window=120,
-         max_containers=MAX_IMAGE_GPUS, memory=49152)
+@app.cls(image=gpu_image, gpu=["L40S", "A100-40GB", "A100-80GB", "H100"], volumes={"/cache": cache_vol}, timeout=900,
+         scaledown_window=120, max_containers=MAX_IMAGE_GPUS, memory=32768)
 class ImageGPU:
     @modal.enter()
     def load(self):
@@ -79,7 +79,7 @@ class ImageGPU:
         return self.model.paint(prompt, seed)
 
 
-@app.cls(image=gpu_image, gpu="H200", volumes={"/cache": cache_vol}, timeout=1200, scaledown_window=150,
+@app.cls(image=gpu_image, gpu=["H200", "B200"], volumes={"/cache": cache_vol}, timeout=1200, scaledown_window=150,
          max_containers=MAX_MOTION_GPUS, memory=98304)
 class MotionGPU:
     @modal.enter()

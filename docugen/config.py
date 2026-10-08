@@ -21,6 +21,7 @@ MOTION_SECONDS = VIDEO_FRAMES / VIDEO_FPS
 # --------------------------------------------------------------------------- pacing
 WORDS_PER_SECOND = 2.6                 # Kokoro at SPEECH_SPEED reads ~155 words a minute
 SPEECH_SPEED = 1.05
+MAX_SPEECH_SPEED = 1.3                 # narration is re-voiced faster (up to this) if it overshoots the length
 SHOT_SECONDS = 3.2                     # target length of one still shot -> a new picture every ~3 s
 MAX_SHOTS_PER_SCENE = 5
 XFADE = 0.3                            # cross-dissolve between shots
