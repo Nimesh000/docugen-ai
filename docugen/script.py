@@ -93,6 +93,49 @@ def parse_json(text: str) -> dict:
         return json.loads(m.group(0))
 
 
+PREFERRED_MODELS = [  # first one that the Groq account can use wins
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "moonshotai/kimi-k2-instruct",
+    "qwen/qwen3-32b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+]
+
+
+def pick_model(client, log=print) -> str:
+    """Groq retires models from time to time - choose the best one this key can use right now."""
+    wanted = [config.LLM_MODEL] + [m for m in PREFERRED_MODELS if m != config.LLM_MODEL]
+    try:
+        available = {m.id for m in client.models.list().data}
+    except Exception as exc:  # listing failed - just try the configured model
+        log(f"Could not list Groq models ({exc}); using {config.LLM_MODEL}")
+        return config.LLM_MODEL
+    for m in wanted:
+        if m in available:
+            return m
+    chat = sorted(m for m in available if not any(x in m for x in ("whisper", "tts", "guard", "embed")))
+    if not chat:
+        raise RuntimeError("No chat model is available for this Groq API key.")
+    return chat[0]
+
+
+def _complete(client, model, messages):
+    """One chat call. Reasoning models get low effort; JSON mode is dropped if the model rejects it."""
+    import openai
+
+    kwargs = dict(model=model, temperature=0.7, messages=messages, max_tokens=8000)
+    if "gpt-oss" in model or "qwen3" in model:
+        kwargs["extra_body"] = {"reasoning_effort": "low" if "gpt-oss" in model else "none"}
+    try:
+        return client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
+    except openai.BadRequestError:
+        kwargs.pop("extra_body", None)
+        return client.chat.completions.create(**kwargs)
+
+
 def write_script(topic: str, seconds: int, heroes: int, log=print) -> dict:
     from openai import OpenAI
 
@@ -100,15 +143,15 @@ def write_script(topic: str, seconds: int, heroes: int, log=print) -> dict:
     if not key:
         raise RuntimeError("GROQ_API_KEY is missing - add it to the 'docugen-secrets' Modal secret.")
     client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", max_retries=5, timeout=90)
+    model = pick_model(client, log)
+    log(f"Script model: {model} (Groq)")
     _, words = targets(seconds)
     messages = [{"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt(topic, seconds, heroes)}]
     last_err = None
     for attempt in range(1, 4):
         try:
-            resp = client.chat.completions.create(
-                model=config.LLM_MODEL, temperature=0.7, response_format={"type": "json_object"},
-                messages=messages, max_tokens=4000)
+            resp = _complete(client, model, messages)
             script = normalize(parse_json(resp.choices[0].message.content), topic, heroes)
             total = sum(len(s["narration"].split()) for s in script["scenes"])
             log(f"Script attempt {attempt}: {len(script['scenes'])} scenes, {total} words (target {words})")

@@ -139,8 +139,22 @@ def run_job(job_id: str, params: dict) -> bool:
     ok = pipeline.run(params, Path("/jobs") / job_id, ModalBackend(), status)
     if ok:
         remember_recent(STATE, job_id)
+    elif status.state.get("stage") == "script":
+        refund_daily_quota(STATE, status.state.get("created_at"))
     publish()
     return ok
+
+
+def refund_daily_quota(store, created_at) -> None:
+    """A job that fails before any GPU work should not use up one of the day's films."""
+    from datetime import datetime, timezone
+
+    try:
+        day = datetime.fromtimestamp(created_at or 0, timezone.utc).strftime("%Y-%m-%d")
+        key = f"count:{day}"
+        store[key] = max(0, int(store.get(key, 0) or 0) - 1)
+    except Exception as exc:
+        print("quota refund skipped:", exc)
 
 
 # --------------------------------------------------------------------------- public web app
