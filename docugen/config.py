@@ -19,7 +19,7 @@ VIDEO_STEPS = 4                        # Lightning distillation
 MOTION_SECONDS = VIDEO_FRAMES / VIDEO_FPS
 
 # --------------------------------------------------------------------------- pacing
-WORDS_PER_SECOND = 2.3                 # measured: Kokoro (bm_george) at SPEECH_SPEED, incl. pauses
+WORDS_PER_SECOND = 2.4                 # Kokoro (bm_george) at SPEECH_SPEED with sentence gaps trimmed
 SPEECH_SPEED = 1.15
 MAX_SPEECH_SPEED = 1.35                # narration is re-voiced faster (up to this) if it overshoots the length
 SHOT_SECONDS = 3.2                     # target length of one still shot -> a new picture every ~3 s
@@ -51,7 +51,8 @@ STYLES = {
     },
 }
 NEGATIVE_PROMPT = "text, watermark, logo, letters, blurry, low quality, deformed, cartoon"
-CLEAN_SUFFIX = "no visible text, no lettering, no signage, no logos, no cameras or film equipment in frame"
+CLEAN_SUFFIX = ("no visible text, no lettering, no numbers, no paper documents, no signage, no logos, "
+                "no cameras or film equipment in frame")
 
 VOICES = {  # Kokoro-82M voices
     "bm_george": "Deep British male (documentary)",

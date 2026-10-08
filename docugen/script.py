@@ -15,12 +15,15 @@ Write a short narrated documentary as JSON. Rules:
 - Scene 1 is a strong hook. Each scene moves the story forward. The last scene closes with a memorable line.
 - Each scene has one narration paragraph of plain spoken sentences (no headings, stage directions, emojis or lists).
 - "shots" are 4 different photographs that illustrate that scene's narration, in order: wide establishing shot,
-  medium shot, close-up detail, and another angle. Each is ONE concrete image description for an image generator:
-  subject, action, setting, era, lighting, camera angle, lens. Be specific (people's clothing, objects, place).
-  The image model renders any writing it is asked for, so NEVER describe phone or computer screens, monitors,
-  dashboards, signs, banners, posters, documents, banknotes, price tags, logos or brand names, and no
-  recognisable real people. Show what the text would be about through people, hands, places, objects and light
-  instead (e.g. "a vendor smiling as a customer holds up a phone to pay", not "a phone screen showing a payment").
+  medium shot of people, close-up of hands / faces / textures, and another angle. Each is ONE concrete image
+  description for an image generator: subject, action, setting, era, lighting, camera angle.
+  Every shot is generated on its own, so EACH shot must restate the country/city, era and who is in it
+  (e.g. "Indian shopkeeper in a Mumbai market, 2018"), never just "the vendor" or "people".
+  The image model renders any writing it sees in the prompt, so NEVER include phone or computer screens, monitors,
+  dashboards, signs, banners, posters, papers, documents, notebooks, handwriting, numbers, charts, QR codes,
+  banknotes, price tags, logos or brand names, and no recognisable real people. Show the idea through people,
+  hands, gestures, places, objects and light instead (e.g. "a vendor smiling as a customer holds up a phone to
+  pay, phone seen from behind", not "a phone screen showing a payment").
 - "motion" describes how the FIRST shot comes alive as a 5 second video: what moves (people walking, steam rising,
   hands tapping a phone) and the camera move (slow dolly in, pan left). One sentence.
 - Mark exactly the requested number of the most visually dynamic scenes with "hero": true.

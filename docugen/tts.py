@@ -7,6 +7,19 @@ import re
 import wave
 
 SAMPLE_RATE = 24000
+SENTENCE_GAP = 0.22          # seconds of silence between sentences
+
+
+def trim_silence(audio, threshold: float = 0.02, keep: float = 0.04):
+    """Cut leading/trailing silence. Returns (trimmed audio, seconds removed from the start)."""
+    import numpy as np
+
+    loud = np.flatnonzero(np.abs(audio) > threshold * max(1e-6, float(np.abs(audio).max())))
+    if loud.size == 0:
+        return audio, 0.0
+    pad = int(keep * SAMPLE_RATE)
+    start, end = max(0, loud[0] - pad), min(len(audio), loud[-1] + pad)
+    return audio[start:end], start / SAMPLE_RATE
 
 
 class Narrator:
@@ -40,10 +53,15 @@ class Narrator:
                 if result.audio is None:
                     continue
                 audio = result.audio.detach().cpu().numpy().astype(np.float32)
+                audio, cut = trim_silence(audio)          # Kokoro pads every sentence with silence
+                if chunks:                                 # keep a short, natural pause between sentences
+                    chunks.append(np.zeros(int(SENTENCE_GAP * SAMPLE_RATE), np.float32))
+                    offset += SENTENCE_GAP
                 for t in result.tokens or []:
                     s, e = getattr(t, "start_ts", None), getattr(t, "end_ts", None)
                     if s is None or e is None or not re.search(r"\w", t.text or ""):
                         continue
+                    s, e = max(0.0, s - cut), max(0.0, e - cut)
                     words.append({"w": t.text.strip(), "s": round(offset + s, 3),
                                   "e": round(offset + max(e, s + 0.05), 3)})
                 chunks.append(audio)
