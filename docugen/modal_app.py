@@ -21,104 +21,120 @@ STATE = modal.Dict.from_name("docugen-state", create_if_missing=True)          #
 
 CACHE_ENV = {
     "HF_HOME": "/cache/hf",
-    "TTS_HOME": "/cache/tts",
-    "XDG_DATA_HOME": "/cache/xdg",
-    "COQUI_TOS_AGREED": "1",
     "HF_HUB_ENABLE_HF_TRANSFER": "1",
     "TOKENIZERS_PARALLELISM": "false",
+    "PYTHONUNBUFFERED": "1",
 }
 SRC_IGNORE = ["**/__pycache__/**", "**/*.pyc"]
+SPACY_EN = ("https://github.com/explosion/spacy-models/releases/download/"
+            "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl")
 
+# CPU image: web app + orchestrator (Groq client, Kokoro TTS on CPU, FFmpeg editing)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "curl", "unzip", "fonts-dejavu-core")
+    .apt_install("ffmpeg", "curl", "unzip", "fonts-dejavu-core", "espeak-ng")
     .run_commands(
         "mkdir -p /root/fonts && curl -L -o /tmp/inter.zip "
         "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip && "
         "unzip -j -o /tmp/inter.zip 'extras/otf/Inter-Bold.otf' 'extras/otf/Inter-Regular.otf' -d /root/fonts && "
         "rm /tmp/inter.zip"
     )
-    .pip_install("fastapi==0.115.12", "openai>=1.40", "pillow>=10.4", "numpy>=1.26", "faster-whisper==1.2.1",
-                 "hf_transfer")
+    .pip_install("torch==2.8.0", index_url="https://download.pytorch.org/whl/cpu")
+    .pip_install("kokoro==0.9.4", "misaki[en]==0.9.4", "transformers==4.57.6", "soundfile", "fastapi==0.115.12",
+                 "openai>=1.40", "pillow>=10.4", "numpy>=1.26", "hf_transfer", SPACY_EN)
     .env(CACHE_ENV)
     .add_local_python_source("docugen", ignore=SRC_IGNORE)
 )
 
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "libsndfile1", "git")
-    .pip_install("torch==2.8.0", "torchaudio==2.8.0")
-    .pip_install("coqui-tts==0.27.5", "diffusers==0.35.2", "transformers==4.57.6", "accelerate>=1.0",
-                 "sentencepiece", "protobuf", "imageio", "imageio-ffmpeg", "pillow", "numpy", "hf_transfer")
+    .apt_install("ffmpeg", "git")
+    .pip_install("torch==2.8.0", "torchvision==0.23.0")
+    .pip_install("diffusers==0.37.0", "transformers==4.57.6", "accelerate>=1.0", "sentencepiece", "protobuf",
+                 "ftfy", "imageio", "imageio-ffmpeg", "pillow", "numpy", "hf_transfer")
     .env(CACHE_ENV)
     .add_local_python_source("docugen", ignore=SRC_IGNORE)
 )
 
+MAX_IMAGE_GPUS = 4
+MAX_MOTION_GPUS = 4
+
 
 # --------------------------------------------------------------------------- GPU services
-@app.cls(image=gpu_image, gpu="T4", volumes={"/cache": cache_vol}, timeout=900, scaledown_window=60,
-         max_containers=1, memory=16384)
-class VoiceGPU:
-    @modal.enter()
-    def load(self):
-        from docugen.gpu.tts import Narrator
-
-        self.model = Narrator()
-        cache_vol.commit()
-
-    @modal.method()
-    def speak(self, text: str, speaker: str) -> bytes:
-        return self.model.speak(text, speaker)
-
-
-@app.cls(image=gpu_image, gpu="L4", volumes={"/cache": cache_vol}, timeout=900, scaledown_window=60,
-         max_containers=1, memory=24576)
+@app.cls(image=gpu_image, gpu="L40S", volumes={"/cache": cache_vol}, timeout=900, scaledown_window=120,
+         max_containers=MAX_IMAGE_GPUS, memory=32768)
 class ImageGPU:
     @modal.enter()
     def load(self):
         from docugen.gpu.images import Painter
 
         self.model = Painter()
-        cache_vol.commit()
+
+    @modal.method()
+    def warm(self) -> bool:
+        return True
 
     @modal.method()
     def paint(self, prompt: str, seed: int) -> bytes:
-        from docugen import config
-
-        return self.model.paint(prompt, config.NEGATIVE_PROMPT, seed, config.IMAGE_W, config.IMAGE_H)
+        return self.model.paint(prompt, seed)
 
 
-@app.cls(image=gpu_image, gpu="L40S", volumes={"/cache": cache_vol}, timeout=1200, scaledown_window=60,
-         max_containers=1, memory=32768)
+@app.cls(image=gpu_image, gpu="H200", volumes={"/cache": cache_vol}, timeout=1200, scaledown_window=150,
+         max_containers=MAX_MOTION_GPUS, memory=98304)
 class MotionGPU:
     @modal.enter()
     def load(self):
         from docugen.gpu.video import Animator
 
         self.model = Animator()
-        cache_vol.commit()
 
     @modal.method()
-    def animate(self, image_png: bytes, prompt: str, seed: int) -> bytes:
-        return self.model.animate(image_png, prompt, seed)
+    def warm(self) -> bool:
+        return True
+
+    @modal.method()
+    def animate(self, image: bytes, prompt: str, seed: int) -> bytes:
+        return self.model.animate(image, prompt, seed)
 
 
 # --------------------------------------------------------------------------- orchestrator
+_NARRATOR = None
+
+
+class _Call:
+    def __init__(self, call):
+        self.call = call
+
+    def result(self) -> bytes:
+        return self.call.get(timeout=1200)
+
+
 class ModalBackend:
-    def write_script(self, topic, seconds, heroes, log):
+    def prewarm(self, images: int, motions: int) -> None:
+        for _ in range(max(1, min(MAX_IMAGE_GPUS, -(-images // 6)))):
+            ImageGPU().warm.spawn()
+        for _ in range(min(MAX_MOTION_GPUS, motions)):
+            MotionGPU().warm.spawn()
+
+    def write_script(self, topic, seconds, heroes, log, scenes):
         from docugen.script import write_script
 
-        return write_script(topic, seconds, heroes, log)
+        return write_script(topic, seconds, heroes, log, scenes)
 
-    def voice(self, texts, speaker):
-        return VoiceGPU().speak.map(texts, kwargs={"speaker": speaker})
+    def narrate(self, texts, voice, speed):
+        global _NARRATOR
+        from docugen.tts import Narrator
+
+        if _NARRATOR is None:
+            _NARRATOR = Narrator()
+        for t in texts:
+            yield _NARRATOR.speak(t, voice, speed)
 
     def images(self, prompts, seeds):
-        return ImageGPU().paint.map(prompts, seeds)
+        return ImageGPU().paint.map(prompts, seeds, return_exceptions=True)
 
-    def animate(self, items):
-        pngs, prompts, seeds = zip(*items)
-        return MotionGPU().animate.map(list(pngs), list(prompts), list(seeds), return_exceptions=True)
+    def start_animate(self, image, prompt, seed):
+        return _Call(MotionGPU().animate.spawn(image, prompt, seed))
 
 
 @app.function(image=base_image, secrets=secrets, volumes={"/jobs": jobs_vol, "/cache": cache_vol},
@@ -157,6 +173,32 @@ def refund_daily_quota(store, created_at) -> None:
         print("quota refund skipped:", exc)
 
 
+@app.function(image=base_image, volumes={"/cache": cache_vol}, cpu=4.0, memory=8192, timeout=3600)
+def prefetch() -> dict:
+    """Download every model into the cache volume once (run before the first film)."""
+    import time
+
+    from huggingface_hub import snapshot_download
+
+    from docugen import config
+
+    sizes = {}
+    for repo in (config.TTS_REPO, config.IMAGE_MODEL, config.VIDEO_MODEL):
+        t = time.time()
+        path = Path(snapshot_download(repo, ignore_patterns=["*.md", "*.gif", "*.mp4", "assets/*", "examples/*"]))
+        gb = sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 1e9
+        sizes[repo] = round(gb, 1)
+        print(f"{repo}: {gb:.1f} GB in {time.time() - t:.0f} s", flush=True)
+        cache_vol.commit()
+    # warm the TTS + spaCy path too
+    from docugen.tts import Narrator
+
+    wav, words = Narrator().speak("Prefetch complete. The narrator is ready.", "bm_george", 1.05)
+    print(f"TTS ok: {len(wav)} bytes, {len(words)} timed words: {words[:3]}", flush=True)
+    cache_vol.commit()
+    return sizes
+
+
 # --------------------------------------------------------------------------- public web app
 @app.function(image=base_image, secrets=secrets, volumes={"/jobs": jobs_vol}, scaledown_window=300, timeout=600)
 @modal.concurrent(max_inputs=50)
@@ -178,14 +220,22 @@ def web():
 
 # --------------------------------------------------------------------------- terminal entry point
 @app.local_entrypoint()
-def main(topic: str = "The rise of India's UPI", seconds: int = 120, style: str = "cinematic",
-         voice: str = "Damien Black", motion: int = 3):
+def main(topic: str = "The rise of India's UPI", seconds: int = 60, scenes: int = 6, motion: int = 2,
+         style: str = "cinematic", voice: str = "bm_george"):
     """modal run docugen/modal_app.py --topic "..."  -> generates a film and prints where to download it."""
+    import json
     import time
 
     job_id = time.strftime("%Y%m%d-%H%M%S-cli")
-    params = {"topic": topic, "seconds": seconds, "style": style, "voice": voice, "motion": motion,
-              "music": True, "subtitles": True}
+    params = {"topic": topic, "seconds": seconds, "scenes": scenes, "style": style, "voice": voice,
+              "motion": motion, "music": True, "subtitles": True}
+    t = time.time()
     ok = run_job.remote(job_id, params)
-    print(("Done" if ok else "Failed") + f": job {job_id}. Download with:\n"
-          f"  modal volume get docugen-jobs {job_id}/output ./{job_id}")
+    state = STATE.get(job_id) or {}
+    print("\n".join(state.get("log", [])))
+    print(json.dumps({k: {"status": v["status"], "seconds": v.get("seconds")} for k, v in
+                      state.get("stages", {}).items()}, indent=1))
+    print(("Done" if ok else f"Failed: {state.get('error')}") + f" in {time.time() - t:.0f} s: job {job_id}. "
+          f"Download with:\n  modal volume get docugen-jobs {job_id}/output ./{job_id}")
+    if not ok:
+        raise SystemExit(1)

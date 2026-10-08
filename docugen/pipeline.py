@@ -1,13 +1,14 @@
 """The documentary pipeline. Each stage starts automatically when the previous one finishes.
 
-    script  -> Groq LLM (GPT-OSS 120B) writes title, logline and scenes (JSON, validated)
-    voice   -> XTTS-v2 narrates every scene            } run in parallel
-    images  -> Juggernaut XL paints every scene        }
-    motion  -> LTX-Video animates the 'hero' scenes (falls back to Ken Burns on failure)
-    captions-> faster-whisper aligns words on the narration
-    assemble-> FFmpeg: Ken Burns / motion clips, title & end cards, subtitles, ducked music
+    script   -> Groq LLM (GPT-OSS 120B) writes title, logline and scenes with 4 shot ideas each (JSON, validated)
+    voice    -> Kokoro-82M narrates every scene on CPU, with word timestamps (seconds, not minutes)
+    plan     -> each scene is cut into ~3 s shots; animated "hero" scenes open with a 5 s video clip
+    images   -> Z-Image-Turbo paints every shot (8 steps, several GPUs in parallel)
+    motion   -> Wan 2.2 Lightning animates each hero still as soon as it is painted (parallel GPUs)
+    captions -> word-level captions straight from the TTS timestamps
+    assemble -> FFmpeg: eased Ken Burns moves, cross-dissolves, title/end cards, captions, ducked music
 
-The GPU work goes through a `Backend`, so the same pipeline runs on Modal or with a fake backend in tests.
+GPU work goes through a `Backend`, so the same pipeline runs on Modal or with a fake backend in tests.
 """
 from __future__ import annotations
 
@@ -21,25 +22,30 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from . import cards, config, media
-from .captions import build_cues, transcribe_words, words_from_script, write_ass, write_srt
+from .captions import build_cues, words_from_script, write_ass, write_srt
 from .music import make_music
 from .script import to_markdown
 
 STAGES = [
-    ("script", "Writing the script (Groq LLM)", 6),
-    ("voice", "Recording narration (XTTS-v2)", 14),
-    ("images", "Painting the scenes (Juggernaut XL)", 25),
-    ("motion", "Animating hero shots (LTX-Video)", 25),
-    ("captions", "Aligning captions (faster-whisper)", 8),
-    ("assemble", "Editing the film (FFmpeg)", 22),
+    ("script", "Writing the script (GPT-OSS 120B)", 8),
+    ("voice", "Recording narration (Kokoro TTS)", 6),
+    ("images", "Painting the shots (Z-Image Turbo)", 30),
+    ("motion", "Animating hero shots (Wan 2.2)", 30),
+    ("captions", "Timing captions", 2),
+    ("assemble", "Editing the film (FFmpeg)", 24),
 ]
 
 
+class Handle(Protocol):
+    def result(self) -> bytes: ...
+
+
 class Backend(Protocol):
-    def write_script(self, topic: str, seconds: int, heroes: int, log: Callable) -> dict: ...
-    def voice(self, texts: list[str], speaker: str) -> Iterable[bytes]: ...
+    def prewarm(self, images: int, motions: int) -> None: ...
+    def write_script(self, topic: str, seconds: int, heroes: int, log: Callable, scenes: int) -> dict: ...
+    def narrate(self, texts: list[str], voice: str, speed: float) -> Iterable[tuple[bytes, list[dict]]]: ...
     def images(self, prompts: list[str], seeds: list[int]) -> Iterable[bytes]: ...
-    def animate(self, items: list[tuple[bytes, str, int]]) -> Iterable[bytes | Exception]: ...
+    def start_animate(self, image: bytes, prompt: str, seed: int) -> Handle: ...
 
 
 class Status:
@@ -60,7 +66,7 @@ class Status:
         line = time.strftime("%H:%M:%S ") + msg
         print(f"[{self.id}] {msg}", flush=True)
         self.state.setdefault("log", []).append(line)
-        self.state["log"] = self.state["log"][-60:]
+        self.state["log"] = self.state["log"][-80:]
         self.state["message"] = msg
         self.save()
 
@@ -96,21 +102,18 @@ def new_state(job_id: str, params: dict) -> dict:
 def run(params: dict, root: Path, backend: Backend, status: Status) -> bool:
     """Run one job end to end. Returns True on success; errors are captured in the status."""
     st = status.state
-    work = root / "work"
-    scenes_dir = root / "scenes"
-    out = root / "output"
-    for d in (work, scenes_dir, out):
-        d.mkdir(parents=True, exist_ok=True)
+    for d in ("work", "scenes", "output"):
+        (root / d).mkdir(parents=True, exist_ok=True)
     st["status"] = "running"
     status.save(force=True)
     t_start = time.time()
     try:
-        _run(params, root, work, scenes_dir, out, backend, status)
+        _run(params, root, backend, status)
         st["status"] = "done"
         st["stage"] = None
         st["progress"] = 1.0
         st["seconds"] = round(time.time() - t_start, 1)
-        status.log("Your documentary is ready")
+        status.log(f"Your documentary is ready ({st['seconds']:.0f} s from start to finish)")
         status.publish()
         status.save(force=True)
         return True
@@ -127,101 +130,155 @@ def run(params: dict, root: Path, backend: Backend, status: Status) -> bool:
         return False
 
 
-def _run(params, root: Path, work: Path, scenes_dir: Path, out: Path, backend: Backend, status: Status) -> None:
+# --------------------------------------------------------------------------- shot planning
+def plan_scene(seconds: float, hero: bool) -> list[dict]:
+    """Cut one scene into shots. A hero scene opens with the generated video clip, the rest are ~3 s stills."""
+    shots, rem = [], seconds
+    if hero:
+        m = config.MOTION_SECONDS
+        if rem - m < 1.8:          # not enough left for a still: let the clip carry the whole scene
+            m = rem
+        shots.append({"kind": "motion", "seconds": m})
+        rem -= m
+    if rem > 0.05:
+        k = max(1, round(rem / config.SHOT_SECONDS))
+        k = min(k, config.MAX_SHOTS_PER_SCENE - len(shots))
+        shots += [{"kind": "still", "seconds": rem / k} for _ in range(k)]
+    return shots
+
+
+def plan_parameters(params: dict) -> tuple[int, int, int]:
+    seconds = int(params["seconds"])
+    scenes = int(params.get("scenes") or config.default_scenes(seconds))
+    scenes = max(config.MIN_SCENES, min(config.MAX_SCENES, scenes))
+    heroes = max(0, min(int(params.get("motion", 0)), config.MAX_HEROES, scenes))
+    return seconds, scenes, heroes
+
+
+def _run(params, root: Path, backend: Backend, status: Status) -> None:
     st = status.state
-    seconds, heroes = int(params["seconds"]), int(params["motion"])
+    work, scenes_dir, out = root / "work", root / "scenes", root / "output"
+    seconds, n_scenes, heroes = plan_parameters(params)
     style = config.STYLES[params["style"]]["prompt"]
+    try:  # start GPU containers now so model loading overlaps with writing and narration
+        backend.prewarm(max(1, round(seconds / config.SHOT_SECONDS)), heroes)
+    except Exception as exc:
+        status.log(f"GPU pre-warm skipped: {exc}")
 
     # ------------------------------------------------------------------ 1. script
     status.stage("script", "running")
-    status.log(f"Writing a {seconds}s documentary about: {params['topic']}")
-    script = backend.write_script(params["topic"], seconds, heroes, status.log)
+    status.log(f"Writing a {seconds}s documentary in {n_scenes} scenes ({heroes} animated) about: {params['topic']}")
+    script = backend.write_script(params["topic"], seconds, heroes, status.log, n_scenes)
     scenes = script["scenes"]
+    n = len(scenes)
     (root / "script.json").write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
     (root / "script.md").write_text(to_markdown(script), encoding="utf-8")
     st["title"], st["logline"] = script["title"], script["logline"]
     st["scenes"] = [{"id": s["id"], "narration": s["narration"], "visual": s["visual"], "hero": s["hero"],
-                     "image": None, "motion": None} for s in scenes]
+                     "image": None, "motion": None, "shots": []} for s in scenes]
     status.stage("script", "done")
     status.publish()
 
-    # ------------------------------------------------------------------ 2+3. voice and images in parallel
+    # ------------------------------------------------------------------ 2. narration (CPU, fast)
     status.stage("voice", "running")
-    status.stage("images", "running")
-    n = len(scenes)
-    voice_err: list[BaseException] = []
+    padded, scene_words = [], []
+    for i, (wav, words) in enumerate(backend.narrate([s["narration"] for s in scenes], params["voice"],
+                                                     config.SPEECH_SPEED)):
+        raw = scenes_dir / f"scene_{i:02d}.wav"
+        raw.write_bytes(wav)
+        dst = work / f"narr_{i:02d}.wav"
+        padded.append((dst, media.pad_narration(raw, dst)))
+        scene_words.append(words)
+        status.stage("voice", "running", (i + 1) / n)
+    narration_len = sum(d for _, d in padded)
+    status.log(f"Narration: {narration_len:.1f} s for {n} scenes")
+    status.stage("voice", "done")
 
-    def do_voice() -> None:
-        try:
-            for i, wav in enumerate(backend.voice([s["narration"] for s in scenes], params["voice"])):
-                (scenes_dir / f"scene_{i:02d}.wav").write_bytes(wav)
-                status.stage("voice", "running", (i + 1) / n)
-            status.stage("voice", "done")
-        except BaseException as exc:  # surfaced after images finish
-            voice_err.append(exc)
-
-    vt = threading.Thread(target=do_voice, daemon=True)
-    vt.start()
-    prompts = [f"{s['visual']}, {style}" for s in scenes]
-    seeds = [1000 + 17 * i for i in range(n)]
-    for i, png in enumerate(backend.images(prompts, seeds)):
-        (scenes_dir / f"scene_{i:02d}.png").write_bytes(png)
-        st["scenes"][i]["image"] = f"scenes/scene_{i:02d}.png"
-        status.stage("images", "running", (i + 1) / n)
-        status.log(f"Painted scene {i + 1}/{n}")
-        status.publish()
-    status.stage("images", "done")
-    vt.join()
-    if voice_err:
-        status.state["stage"] = "voice"
-        raise voice_err[0]
-
-    # ------------------------------------------------------------------ 4. motion
-    hero_ids = [s["id"] for s in scenes if s["hero"]]
-    motion_paths: dict[int, Path] = {}
-    if hero_ids:
-        status.stage("motion", "running")
-        items = [((scenes_dir / f"scene_{i:02d}.png").read_bytes(), f"{scenes[i]['motion']}, {scenes[i]['visual']}",
-                  42 + i) for i in hero_ids]
-        for k, (i, result) in enumerate(zip(hero_ids, backend.animate(items))):
-            if isinstance(result, (bytes, bytearray)) and len(result) > 1000:
-                p = scenes_dir / f"motion_{i:02d}.mp4"
-                p.write_bytes(result)
-                motion_paths[i] = p
-                st["scenes"][i]["motion"] = f"scenes/motion_{i:02d}.mp4"
-                status.log(f"Animated scene {i + 1}")
+    # ------------------------------------------------------------------ 3. shot plan
+    jobs: list[dict] = []          # image generation jobs
+    timeline: list[dict] = []      # shots in screen order (scenes only; cards are added at assembly)
+    for i, s in enumerate(scenes):
+        shots = plan_scene(padded[i][1], s["hero"])
+        prompts = s["shots"]
+        still_k = 1 if s["hero"] else 0      # hero clip uses prompt 0; stills continue from prompt 1
+        for j, shot in enumerate(shots):
+            if shot["kind"] == "motion":
+                prompt_idx = 0
             else:
-                status.log(f"Scene {i + 1}: animation failed ({str(result)[:120]}) - using Ken Burns instead")
-            status.stage("motion", "running", (k + 1) / len(hero_ids))
+                prompt_idx = still_k % len(prompts)
+                still_k += 1
+            job = {"scene": i, "shot": j, "prompt": f"{prompts[prompt_idx]}, {style}", "seed": 1000 + 97 * i + 13 * j,
+                   "motion": shot["kind"] == "motion", "file": scenes_dir / f"shot_{i:02d}_{j}.jpg"}
+            jobs.append(job)
+            timeline.append({**shot, "job": job, "move": (i * 3 + j) % 7})
+    status.log(f"Shot plan: {len(timeline)} shots, {sum(j['motion'] for j in jobs)} animated")
+
+    # ------------------------------------------------------------------ 4+5. images, motion starts as heroes land
+    status.stage("images", "running")
+    if heroes:
+        status.stage("motion", "running", 0.0)
+    order = sorted(jobs, key=lambda j: (not j["motion"], j["scene"], j["shot"]))  # hero stills first
+    handles: dict[int, Handle] = {}
+    last_good: bytes | None = None
+    for k, (job, img) in enumerate(zip(order, backend.images([j["prompt"] for j in order],
+                                                             [j["seed"] for j in order]))):
+        if not isinstance(img, (bytes, bytearray)):
+            status.log(f"Shot {k + 1}: image failed ({str(img)[:100]}) - reusing the previous picture")
+            if last_good is None:
+                raise RuntimeError(f"image generation failed: {img}")
+            img = last_good
+        last_good = img
+        job["file"].write_bytes(img)
+        rel = f"scenes/{job['file'].name}"
+        sc = st["scenes"][job["scene"]]
+        sc["shots"].append(rel)
+        if job["shot"] == 0:
+            sc["image"] = rel
+        if job["motion"]:
+            s = scenes[job["scene"]]
+            handles[job["scene"]] = backend.start_animate(img, f"{s['motion']}. {s['shots'][0]}", 42 + job["scene"])
+            status.log(f"Animating scene {job['scene'] + 1}")
+        status.stage("images", "running", (k + 1) / len(order))
+        if k % 3 == 2 or k == len(order) - 1:
+            status.publish()
+    status.log(f"Painted {len(order)} shots")
+    status.stage("images", "done")
+
+    motion_files: dict[int, Path] = {}
+    if handles:
+        for k, (i, h) in enumerate(handles.items()):
+            try:
+                data = h.result()
+                if not data or len(data) < 1000:
+                    raise RuntimeError("empty clip")
+                p = scenes_dir / f"motion_{i:02d}.mp4"
+                p.write_bytes(data)
+                motion_files[i] = p
+                st["scenes"][i]["motion"] = f"scenes/{p.name}"
+                status.log(f"Animated scene {i + 1}")
+            except Exception as exc:
+                status.log(f"Scene {i + 1}: animation failed ({str(exc)[:120]}) - using a Ken Burns move instead")
+            status.stage("motion", "running", (k + 1) / len(handles))
             status.publish()
         status.stage("motion", "done")
     else:
         status.stage("motion", "skipped")
 
-    # ------------------------------------------------------------------ 5. narration timeline + captions
+    # ------------------------------------------------------------------ 6. captions from TTS timestamps
     status.stage("captions", "running")
-    intro_s, outro_s = media.frames(4.5), media.frames(4.5)
-    padded, spans, t = [], [], intro_s
-    for i in range(n):
-        dst = work / f"narr_{i:02d}.wav"
-        d = media.pad_narration(scenes_dir / f"scene_{i:02d}.wav", dst)
-        padded.append((dst, d))
-        spans.append((t + 0.35, t + d - 0.6, scenes[i]["narration"]))
+    card = media.frames(config.CARD_SECONDS)
+    words_all, spans, t = [], [], card
+    for i, (_, d) in enumerate(padded):
+        lead = 0.12
+        words_all += [{"w": w["w"], "s": round(t + lead + w["s"], 3), "e": round(t + lead + w["e"], 3)}
+                      for w in scene_words[i] if w.get("w")]
+        spans.append((t + lead, t + d - 0.3, scenes[i]["narration"]))
         t += d
-    total = t + outro_s
-    media.silence(work / "sil_intro.wav", intro_s)
-    media.silence(work / "sil_outro.wav", outro_s)
-    audio_list = media.concat_list([work / "sil_intro.wav"] + [p for p, _ in padded] + [work / "sil_outro.wav"],
-                                   work / "audio.txt")
-    run_ffmpeg_concat_audio(audio_list, out / "narration.wav")
-    try:
-        words = transcribe_words(out / "narration.wav", config.WHISPER_MODEL, script["title"], status.log)
-        if len(words) < 0.5 * sum(len(s[2].split()) for s in spans):
-            raise RuntimeError("too few words recognised")
-    except Exception as exc:
-        status.log(f"Whisper alignment unavailable ({exc}); using script timing")
-        words = words_from_script(spans)
-    cues = build_cues([words], max_words=7, max_seconds=2.8)
+    total = t + card
+    if len(words_all) < 0.5 * sum(len(s[2].split()) for s in spans):
+        status.log("TTS timestamps incomplete - spreading caption words evenly")
+        words_all = words_from_script(spans)
+    cues = build_cues([words_all], max_words=6, max_seconds=2.4)
     write_srt(cues, out / "subtitles.srt")
     fonts_dir = work / "fonts"
     fonts_dir.mkdir(exist_ok=True)
@@ -232,55 +289,61 @@ def _run(params, root: Path, work: Path, scenes_dir: Path, out: Path, backend: B
     write_ass(cues, work / "subs.ass", config.WIDTH, config.HEIGHT, cards.font_family(), 50)
     status.stage("captions", "done")
 
-    # ------------------------------------------------------------------ 6. assemble
+    # ------------------------------------------------------------------ 7. assemble
     status.stage("assemble", "running")
-    first_png = (scenes_dir / "scene_00.png").read_bytes()
-    last_png = (scenes_dir / f"scene_{n - 1:02d}.png").read_bytes()
-    cards.title_card(work / "title.png", config.WIDTH, config.HEIGHT, script["title"], script["logline"], first_png)
-    cards.end_card(work / "end.png", config.WIDTH, config.HEIGHT, last_png)
+    media.silence(work / "sil_card.wav", card)
+    audio_list = media.concat_list([work / "sil_card.wav"] + [p for p, _ in padded] + [work / "sil_card.wav"],
+                                   work / "audio.txt")
+    media.run_concat_audio(audio_list, out / "narration.wav")
 
-    jobs = [("title", work / "title.png", None, intro_s, 0)]
-    for i, (_, d) in enumerate(padded):
-        jobs.append((f"scene{i}", scenes_dir / f"scene_{i:02d}.png", motion_paths.get(i), d, i))
-    jobs.append(("end", work / "end.png", None, outro_s, 1))
-    clip_paths = [work / f"clip_{k:02d}.mp4" for k in range(len(jobs))]
+    first_img = jobs[0]["file"].read_bytes()
+    last_img = jobs[-1]["file"].read_bytes()
+    cards.title_card(work / "title.png", config.WIDTH, config.HEIGHT, script["title"], script["logline"], first_img)
+    cards.end_card(work / "end.png", config.WIDTH, config.HEIGHT, last_img)
+    shots = [{"kind": "card", "seconds": card, "image": work / "title.png", "move": -1}]
+    for sh in timeline:
+        i = sh["job"]["scene"]
+        if sh["kind"] == "motion" and i in motion_files:
+            shots.append({"kind": "motion", "seconds": sh["seconds"], "clip": motion_files[i]})
+        else:
+            shots.append({"kind": "still", "seconds": sh["seconds"], "image": sh["job"]["file"], "move": sh["move"]})
+    shots.append({"kind": "card", "seconds": card, "image": work / "end.png", "move": -1})
+
+    x = config.XFADE
+    paths = [work / f"shot_{k:03d}.mp4" for k in range(len(shots))]
     done = [0]
 
     def render(k: int) -> None:
-        name, img, motion, d, move = jobs[k]
-        if motion is not None:
+        sh = shots[k]
+        length = sh["seconds"] + (x if k < len(shots) - 1 else 0)
+        if sh["kind"] == "motion":
             try:
-                media.motion_clip(motion, clip_paths[k], d)
+                media.motion_clip(sh["clip"], paths[k], length)
             except Exception as exc:
-                status.log(f"{name}: motion clip failed ({exc}); using still")
-                media.ken_burns(img, clip_paths[k], d, move)
+                status.log(f"shot {k}: motion clip failed ({exc}); using a still")
+                media.ken_burns(timeline[k - 1]["job"]["file"], paths[k], length, k)
         else:
-            media.ken_burns(img, clip_paths[k], d, move if name.startswith("scene") else 0)
+            media.ken_burns(sh["image"], paths[k], length, sh["move"])
         done[0] += 1
-        status.stage("assemble", "running", 0.6 * done[0] / len(jobs))
+        status.stage("assemble", "running", 0.5 * done[0] / len(shots))
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(render, range(len(jobs))))
-    status.log("All shots rendered - final mix")
-    video_list = media.concat_list(clip_paths, work / "video.txt")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(render, range(len(shots))))
+    status.log(f"Rendered {len(shots)} shots - final cut with dissolves, captions and music")
     music = None
     if params.get("music", True):
         try:
             music = make_music(work / "music.mp3")
         except Exception as exc:
             status.log(f"Music skipped: {exc}")
-    media.final_mix(work, video_list, audio_list, music, total, [(0, intro_s), (total - outro_s, total)],
+    media.final_mix(work, [(p, sh["seconds"]) for p, sh in zip(paths, shots)], x, audio_list, music, total,
+                    [(0, card), (total - card, total)],
                     work / "subs.ass" if params.get("subtitles", True) and cues else None,
                     out / "documentary.mp4", out / "documentary_audio.wav",
-                    on_progress=lambda f: status.stage("assemble", "running", 0.6 + 0.38 * f))
-    cards.thumbnail(first_png, out / "thumbnail.jpg", script["title"])
+                    on_progress=lambda f: status.stage("assemble", "running", 0.5 + 0.48 * f))
+    cards.thumbnail(first_img, out / "thumbnail.jpg", script["title"])
     shutil.copy2(root / "script.md", out / "script.md")
     shutil.copy2(root / "script.json", out / "script.json")
     st["duration"] = round(total, 1)
     st["outputs"] = [{"name": p.name, "bytes": p.stat().st_size} for p in sorted(out.iterdir()) if p.is_file()]
     status.stage("assemble", "done")
-
-
-def run_ffmpeg_concat_audio(audio_list: Path, dst: Path) -> None:
-    from .ffmpeg import run as ff
-    ff(["-f", "concat", "-safe", "0", "-i", str(audio_list), "-c:a", "pcm_s16le", str(dst)])
