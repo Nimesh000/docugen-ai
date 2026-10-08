@@ -22,10 +22,11 @@ ALLOWED_EXT = {".png", ".jpg", ".mp4", ".wav", ".srt", ".md", ".json"}
 
 class JobRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=config.MAX_TOPIC_CHARS)
-    seconds: int = 120
+    seconds: int = 60
+    scenes: int = Field(default=6, ge=config.MIN_SCENES, le=config.MAX_SCENES)
     style: str = "cinematic"
     voice: str = config.DEFAULT_VOICE
-    motion: int = Field(default=3, ge=0, le=4)
+    motion: int = Field(default=2, ge=0, le=config.MAX_HEROES)
     music: bool = True
     subtitles: bool = True
     code: str = ""
@@ -46,6 +47,10 @@ def create_app(store, spawn: Callable[[str, dict], None], jobs_root: Path,
             "styles": {k: v["label"] for k, v in config.STYLES.items()},
             "voices": config.VOICES,
             "lengths": config.LENGTHS,
+            "default_voice": config.DEFAULT_VOICE,
+            "scenes": {"min": config.MIN_SCENES, "max": config.MAX_SCENES,
+                       "default": {s: config.default_scenes(s) for s in config.LENGTHS}},
+            "max_heroes": config.MAX_HEROES,
             "access_required": bool(config.ACCESS_CODE),
             "daily_limit": config.DAILY_LIMIT,
             "used_today": used,
@@ -61,6 +66,8 @@ def create_app(store, spawn: Callable[[str, dict], None], jobs_root: Path,
             raise HTTPException(400, "Unknown style.")
         if req.voice not in config.VOICES:
             raise HTTPException(400, "Unknown voice.")
+        if req.motion > req.scenes:
+            raise HTTPException(400, "There can't be more animated shots than scenes.")
         key = today_key()
         used = store.get(key, 0) or 0
         if used >= config.DAILY_LIMIT:
