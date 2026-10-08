@@ -15,11 +15,17 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Deploy to Modal
         env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          RAW_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          RAW_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: |
-          if [ -z "$MODAL_TOKEN_ID" ]; then
+          if [ -z "$RAW_ID" ]; then
             echo "::notice::Add MODAL_TOKEN_ID and MODAL_TOKEN_SECRET as repository secrets to auto-deploy to your Modal account."
             exit 0
           fi
+          # tolerate pasted quotes, spaces or a 'token_id = ' prefix copied from ~/.modal.toml
+          clean() { printf '%s' "$1" | tr -d "\"' \r\n\t" | sed -E 's/^(token_id|token_secret)=//'; }
+          export MODAL_TOKEN_ID="$(clean "$RAW_ID")"
+          export MODAL_TOKEN_SECRET="$(clean "$RAW_SECRET")"
+          case "$MODAL_TOKEN_ID" in ak-*) ;; *) echo "::error::MODAL_TOKEN_ID should start with 'ak-' (it starts with '${MODAL_TOKEN_ID:0:3}'). Did you swap ID and secret?"; exit 1;; esac
+          case "$MODAL_TOKEN_SECRET" in as-*) ;; *) echo "::error::MODAL_TOKEN_SECRET should start with 'as-' (it starts with '${MODAL_TOKEN_SECRET:0:3}')."; exit 1;; esac
           modal deploy docugen/modal_app.py
