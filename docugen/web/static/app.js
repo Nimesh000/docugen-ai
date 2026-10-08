@@ -108,7 +108,7 @@ function render(job) {
     }
     if (s.motion && !media.dataset.mov) {
       media.dataset.mov = 1;
-      media.insertAdjacentHTML("beforeend", `<video src="${fileUrl(job.id, s.motion)}" muted loop playsinline autoplay></video><span class="tag motion">LTX motion</span>`);
+      media.insertAdjacentHTML("beforeend", `<video src="${fileUrl(job.id, s.motion)}" poster="${s.image ? fileUrl(job.id, s.image) : ""}" muted loop playsinline autoplay preload="auto"></video><span class="tag motion">LTX motion</span>`);
     }
   });
 
