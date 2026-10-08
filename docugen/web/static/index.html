@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocuGen AI</title>
+<meta name="description" content="Type a topic, get a narrated AI documentary. Llama 3.3 + XTTS-v2 + Juggernaut XL + LTX-Video on serverless GPUs.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23E8B04B'/><rect x='7' y='10' width='18' height='12' rx='2' fill='%230A0C10'/><circle cx='16' cy='16' r='3' fill='%23E8B04B'/></svg>">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#"><span class="mark"></span>DocuGen <b>AI</b></a>
+  <a class="gh" href="https://github.com/Nimesh000/docugen-ai" target="_blank" rel="noopener">GitHub &nearr;</a>
+</header>
+
+<main>
+<!-- ======================================================= HOME -->
+<section id="home" class="view">
+  <div class="hero">
+    <p class="eyebrow">Multi-model generative pipeline &middot; serverless GPUs</p>
+    <h1>Type a topic.<br><em>Get a documentary.</em></h1>
+    <p class="lede">An LLM writes the script, XTTS-v2 narrates it, Juggernaut XL paints every scene, LTX-Video
+      brings the key shots to life and FFmpeg cuts it all together, with captions and a music score.</p>
+  </div>
+
+  <form id="form" class="panel" autocomplete="off">
+    <label class="lbl" for="topic">What should the documentary be about?</label>
+    <textarea id="topic" name="topic" rows="2" maxlength="200" placeholder="e.g. The rise of India's UPI payments revolution" required></textarea>
+    <div class="chips" id="chips">
+      <button type="button">The rise of India's UPI</button>
+      <button type="button">The Indus Valley Civilisation</button>
+      <button type="button">How coffee conquered the world</button>
+      <button type="button">The race to the Moon</button>
+    </div>
+
+    <div class="row2">
+      <div>
+        <span class="lbl">Length</span>
+        <div class="seg" id="lengths"></div>
+      </div>
+      <div>
+        <span class="lbl">Narrator</span>
+        <select id="voice" name="voice"></select>
+      </div>
+    </div>
+
+    <span class="lbl">Visual style</span>
+    <div class="styles" id="styles"></div>
+
+    <div class="row2">
+      <div>
+        <span class="lbl">Animated hero shots <output id="motionOut">3</output></span>
+        <input type="range" id="motion" min="0" max="4" value="3">
+        <small class="hint">Each one is a ~5 s LTX-Video clip. Others use slow Ken Burns moves.</small>
+      </div>
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="music" checked><span></span>Music score</label>
+        <label class="toggle"><input type="checkbox" id="subtitles" checked><span></span>Burned-in captions</label>
+      </div>
+    </div>
+
+    <div id="codeRow" class="hidden">
+      <label class="lbl" for="code">Access code</label>
+      <input id="code" type="password" placeholder="Ask the owner of this demo for the code">
+    </div>
+
+    <button class="go" id="go" type="submit">Generate documentary</button>
+    <p class="quota" id="quota"></p>
+    <p class="err hidden" id="formErr"></p>
+  </form>
+
+  <ol class="models">
+    <li><b>Script</b><span>Llama 3.3 70B &middot; Groq</span></li>
+    <li><b>Voice</b><span>XTTS-v2</span></li>
+    <li><b>Images</b><span>Juggernaut XL</span></li>
+    <li><b>Motion</b><span>LTX-Video</span></li>
+    <li><b>Captions</b><span>faster-whisper</span></li>
+    <li><b>Edit</b><span>FFmpeg</span></li>
+  </ol>
+
+  <section id="recentWrap" class="hidden">
+    <h2>Recent documentaries</h2>
+    <div class="recent" id="recent"></div>
+  </section>
+</section>
+
+<!-- ======================================================= JOB -->
+<section id="job" class="view hidden">
+  <a class="back" href="#">&larr; New documentary</a>
+  <div class="panel">
+    <div class="jobhead">
+      <div>
+        <p class="eyebrow" id="jobTopic"></p>
+        <h2 id="jobTitle">Starting&hellip;</h2>
+        <p class="lede small" id="jobLogline"></p>
+      </div>
+      <div class="pct" id="pct">0%</div>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <ol class="stages" id="stages"></ol>
+    <p class="msg" id="msg"></p>
+    <p class="err hidden" id="jobErr"></p>
+    <details class="logbox"><summary>Live log</summary><pre id="log"></pre></details>
+  </div>
+
+  <div id="result" class="hidden">
+    <div class="panel player"><video id="video" controls playsinline preload="metadata"></video></div>
+    <div class="panel">
+      <h3>Downloads</h3>
+      <div class="downloads" id="downloads"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="scenesPanel">
+    <h3>Storyboard</h3>
+    <div class="scenes" id="scenes"></div>
+  </div>
+</section>
+</main>
+<footer>DocuGen AI &middot; built by Nimesh Goyal &middot; open source on GitHub</footer>
+<script src="app.js"></script>
+</body>
+</html>
