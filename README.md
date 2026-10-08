@@ -8,7 +8,7 @@ narrate, illustrate and animate a 30 second to 2 minute documentary, which FFmpe
 | Step | Model | Runs on |
 |---|---|---|
 | Script (title, scenes, 4 shot ideas per scene) | GPT-OSS 120B via Groq (auto-fallback to any available model) | Groq API (free tier) |
-| Narration + word timestamps | Kokoro-82M | Modal CPU (faster than real time) |
+| Narration + word timestamps | Kokoro-82M | Modal T4 GPU (~50x faster than real time) |
 | Shot images | Z-Image Turbo (6B, 8 steps) | Modal L40S GPUs, up to 4 in parallel |
 | Animated hero shots | Wan 2.2 I2V A14B + Lightning (4 steps) | Modal H200 GPUs, up to 4 in parallel |
 | Captions | straight from the TTS word timings | Modal CPU |
@@ -21,7 +21,7 @@ flowchart LR
     O -. pre-warm .-> I
     O -. pre-warm .-> M
     O --> S[Script<br/>GPT-OSS 120B]
-    S --> V[Narration<br/>Kokoro-82M]
+    S --> V[Narration<br/>Kokoro-82M · T4]
     V --> P[Shot plan<br/>~3 s per shot]
     P --> I[Images<br/>Z-Image Turbo x4 GPUs]
     I -->|hero stills, as soon as ready| M[Motion<br/>Wan 2.2 x4 GPUs]
@@ -37,7 +37,7 @@ flowchart LR
 1. **Script.** You pick the length, the number of scenes and how many of them open with an animated shot. The LLM
    returns strict JSON: title, logline, and for every scene the narration, four shot ideas (wide, medium, close-up,
    another angle) and a motion description. Python validates and repairs it.
-2. **Narration first.** Kokoro reads each scene in a few seconds on CPU and returns word timestamps. Knowing the
+2. **Narration first.** Kokoro reads every scene in a few seconds on a small GPU and returns word timestamps. Knowing the
    exact length of every scene lets the editor plan the cut before any image exists.
 3. **Shot plan.** Every scene is cut into ~3 second shots, so the picture keeps changing. Hero scenes open with a
    5 second video clip.
