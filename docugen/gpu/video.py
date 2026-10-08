@@ -1,4 +1,4 @@
-"""LTX-Video image-to-video for the 'hero' scenes. Runs inside a GPU container."""
+"""Wan 2.2 image-to-video (A14B MoE with Lightning 4-step distillation). Runs inside a GPU container."""
 from __future__ import annotations
 
 import io
@@ -9,36 +9,36 @@ import tempfile
 class Animator:
     def __init__(self, device: str = "cuda"):
         import torch
-        from diffusers import LTXImageToVideoPipeline
+        from diffusers import UniPCMultistepScheduler, WanImageToVideoPipeline
 
         from .. import config
 
-        self.pipe = LTXImageToVideoPipeline.from_pretrained(config.VIDEO_MODEL, torch_dtype=torch.bfloat16)
-        self.pipe.to(device)
-        if hasattr(self.pipe, "vae") and hasattr(self.pipe.vae, "enable_tiling"):
-            self.pipe.vae.enable_tiling()
+        pipe = WanImageToVideoPipeline.from_pretrained(config.VIDEO_MODEL, torch_dtype=torch.bfloat16)
+        pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=5.0)
+        self.pipe = pipe.to(device)
         self.torch = torch
         self.device = device
         self.cfg = config
 
-    def animate(self, image_png: bytes, prompt: str, seed: int, steps: int = 40) -> bytes:
+    def animate(self, image_bytes: bytes, prompt: str, seed: int) -> bytes:
         from diffusers.utils import export_to_video
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         cfg = self.cfg
-        image = Image.open(io.BytesIO(image_png)).convert("RGB").resize((cfg.VIDEO_W, cfg.VIDEO_H), Image.LANCZOS)
+        image = ImageOps.fit(Image.open(io.BytesIO(image_bytes)).convert("RGB"), (cfg.VIDEO_W, cfg.VIDEO_H),
+                             Image.LANCZOS)
         g = self.torch.Generator(device=self.device).manual_seed(seed)
-        frames = self.pipe(
-            image=image,
-            prompt=prompt,
-            negative_prompt="worst quality, inconsistent motion, blurry, jittery, distorted, morphing, text",
-            width=cfg.VIDEO_W, height=cfg.VIDEO_H, num_frames=cfg.VIDEO_FRAMES,
-            num_inference_steps=steps, guidance_scale=3.0, generator=g,
-        ).frames[0]
+        with self.torch.inference_mode():
+            frames = self.pipe(
+                image=image, prompt=prompt + ", smooth natural motion, cinematic, realistic",
+                negative_prompt="static, frozen, blurry, distorted, morphing, text, watermark",
+                width=cfg.VIDEO_W, height=cfg.VIDEO_H, num_frames=cfg.VIDEO_FRAMES,
+                num_inference_steps=cfg.VIDEO_STEPS, guidance_scale=1.0, guidance_scale_2=1.0, generator=g,
+            ).frames[0]
         fd, path = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
         try:
-            export_to_video(frames, path, fps=24)
+            export_to_video(frames, path, fps=cfg.VIDEO_FPS, quality=9)
             with open(path, "rb") as fh:
                 return fh.read()
         finally:
