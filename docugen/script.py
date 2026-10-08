@@ -17,7 +17,10 @@ Write a short narrated documentary as JSON. Rules:
 - "shots" are 4 different photographs that illustrate that scene's narration, in order: wide establishing shot,
   medium shot, close-up detail, and another angle. Each is ONE concrete image description for an image generator:
   subject, action, setting, era, lighting, camera angle, lens. Be specific (people's clothing, objects, place).
-  Never ask for readable text, logos, brand names, user interfaces or recognisable real people.
+  The image model renders any writing it is asked for, so NEVER describe phone or computer screens, monitors,
+  dashboards, signs, banners, posters, documents, banknotes, price tags, logos or brand names, and no
+  recognisable real people. Show what the text would be about through people, hands, places, objects and light
+  instead (e.g. "a vendor smiling as a customer holds up a phone to pay", not "a phone screen showing a payment").
 - "motion" describes how the FIRST shot comes alive as a 5 second video: what moves (people walking, steam rising,
   hands tapping a phone) and the camera move (slow dolly in, pan left). One sentence.
 - Mark exactly the requested number of the most visually dynamic scenes with "hero": true.

@@ -29,29 +29,29 @@ SRC_IGNORE = ["**/__pycache__/**", "**/*.pyc"]
 SPACY_EN = ("https://github.com/explosion/spacy-models/releases/download/"
             "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl")
 
-# CPU image: web app + orchestrator (Groq client, Kokoro TTS on CPU, FFmpeg editing)
+# CPU image: web app + orchestrator (Groq client, FFmpeg editing)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "curl", "unzip", "fonts-dejavu-core", "espeak-ng")
+    .apt_install("ffmpeg", "curl", "unzip", "fonts-dejavu-core")
     .run_commands(
         "mkdir -p /root/fonts && curl -L -o /tmp/inter.zip "
         "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip && "
         "unzip -j -o /tmp/inter.zip 'extras/otf/Inter-Bold.otf' 'extras/otf/Inter-Regular.otf' -d /root/fonts && "
         "rm /tmp/inter.zip"
     )
-    .pip_install("torch==2.8.0", index_url="https://download.pytorch.org/whl/cpu")
-    .pip_install("kokoro==0.9.4", "misaki[en]==0.9.4", "transformers==4.57.6", "soundfile", "fastapi==0.115.12",
-                 "openai>=1.40", "pillow>=10.4", "numpy>=1.26", "hf_transfer", SPACY_EN)
+    .pip_install("fastapi==0.115.12", "openai>=1.40", "pillow>=10.4", "numpy>=1.26", "huggingface_hub<1.0",
+                 "hf_transfer")
     .env(CACHE_ENV)
     .add_local_python_source("docugen", ignore=SRC_IGNORE)
 )
 
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "git")
+    .apt_install("ffmpeg", "git", "espeak-ng")
     .pip_install("torch==2.8.0", "torchvision==0.23.0")
     .pip_install("diffusers==0.37.0", "transformers==4.57.6", "accelerate>=1.0", "sentencepiece", "protobuf",
-                 "ftfy", "imageio", "imageio-ffmpeg", "pillow", "numpy", "hf_transfer")
+                 "ftfy", "imageio", "imageio-ffmpeg", "pillow", "numpy", "hf_transfer",
+                 "kokoro==0.9.4", "misaki[en]==0.9.4", "soundfile", SPACY_EN)
     .env(CACHE_ENV)
     .add_local_python_source("docugen", ignore=SRC_IGNORE)
 )
@@ -61,6 +61,25 @@ MAX_MOTION_GPUS = 4
 
 
 # --------------------------------------------------------------------------- GPU services
+@app.cls(image=gpu_image, gpu=["T4", "L4", "A10G"], volumes={"/cache": cache_vol}, timeout=600, scaledown_window=120,
+         max_containers=2, memory=16384)
+class VoiceGPU:
+    @modal.enter()
+    def load(self):
+        from docugen.tts import Narrator
+
+        self.model = Narrator(device="cuda")
+        self.model.speak("Ready.", "bm_george", 1.0)   # warm up G2P + CUDA kernels
+
+    @modal.method()
+    def warm(self) -> bool:
+        return True
+
+    @modal.method()
+    def speak_all(self, texts: list[str], voice: str, speed: float) -> list:
+        return [self.model.speak(t, voice, speed) for t in texts]
+
+
 @app.cls(image=gpu_image, gpu=["L40S", "A100-40GB", "A100-80GB", "H100"], volumes={"/cache": cache_vol}, timeout=900,
          scaledown_window=120, max_containers=MAX_IMAGE_GPUS, memory=32768)
 class ImageGPU:
@@ -98,9 +117,6 @@ class MotionGPU:
 
 
 # --------------------------------------------------------------------------- orchestrator
-_NARRATOR = None
-
-
 class _Call:
     def __init__(self, call):
         self.call = call
@@ -111,6 +127,7 @@ class _Call:
 
 class ModalBackend:
     def prewarm(self, images: int, motions: int) -> None:
+        VoiceGPU().warm.spawn()
         for _ in range(max(1, min(MAX_IMAGE_GPUS, -(-images // 6)))):
             ImageGPU().warm.spawn()
         for _ in range(min(MAX_MOTION_GPUS, motions)):
@@ -122,13 +139,7 @@ class ModalBackend:
         return write_script(topic, seconds, heroes, log, scenes)
 
     def narrate(self, texts, voice, speed):
-        global _NARRATOR
-        from docugen.tts import Narrator
-
-        if _NARRATOR is None:
-            _NARRATOR = Narrator()
-        for t in texts:
-            yield _NARRATOR.speak(t, voice, speed)
+        return VoiceGPU().speak_all.remote(texts, voice, speed)
 
     def images(self, prompts, seeds):
         return ImageGPU().paint.map(prompts, seeds, return_exceptions=True)
@@ -190,12 +201,8 @@ def prefetch() -> dict:
         sizes[repo] = round(gb, 1)
         print(f"{repo}: {gb:.1f} GB in {time.time() - t:.0f} s", flush=True)
         cache_vol.commit()
-    # warm the TTS + spaCy path too
-    from docugen.tts import Narrator
-
-    wav, words = Narrator().speak("Prefetch complete. The narrator is ready.", "bm_george", 1.05)
+    wav, words = VoiceGPU().speak_all.remote(["Prefetch complete. The narrator is ready."], "bm_george", 1.1)[0]
     print(f"TTS ok: {len(wav)} bytes, {len(words)} timed words: {words[:3]}", flush=True)
-    cache_vol.commit()
     return sizes
 
 

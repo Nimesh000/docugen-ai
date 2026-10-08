@@ -212,7 +212,7 @@ def _run(params, root: Path, backend: Backend, status: Status) -> None:
             else:
                 prompt_idx = still_k % len(prompts)
                 still_k += 1
-            job = {"scene": i, "shot": j, "prompt": f"{prompts[prompt_idx]}, {style}", "seed": 1000 + 97 * i + 13 * j,
+            job = {"scene": i, "shot": j, "prompt": f"{prompts[prompt_idx]}, {style}, {config.CLEAN_SUFFIX}", "seed": 1000 + 97 * i + 13 * j,
                    "motion": shot["kind"] == "motion", "file": scenes_dir / f"shot_{i:02d}_{j}.jpg"}
             jobs.append(job)
             timeline.append({**shot, "job": job, "move": (i * 3 + j) % 7})

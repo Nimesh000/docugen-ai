@@ -1,5 +1,5 @@
-"""Kokoro-82M narration. Small enough to run on the orchestrator's CPUs, faster than real time,
-and it returns word timestamps, so captions need no separate speech recognition pass."""
+"""Kokoro-82M narration on a small GPU (~50x faster than real time). It also returns word timestamps,
+so captions need no separate speech recognition pass."""
 from __future__ import annotations
 
 import io
@@ -10,15 +10,14 @@ SAMPLE_RATE = 24000
 
 
 class Narrator:
-    def __init__(self, threads: int = 8):
+    def __init__(self, device: str = "cpu"):
         import torch
         from kokoro import KModel
 
         from . import config
 
-        torch.set_num_threads(threads)
         self.torch = torch
-        self.model = KModel(repo_id=config.TTS_REPO).eval()
+        self.model = KModel(repo_id=config.TTS_REPO).to(device).eval()
         self.pipelines: dict = {}
 
     def _pipeline(self, voice: str):

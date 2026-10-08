@@ -7,7 +7,7 @@ import os
 LLM_MODEL = os.environ.get("DOCUGEN_LLM_MODEL", "openai/gpt-oss-120b")   # Groq (falls back automatically, see script.py)
 IMAGE_MODEL = os.environ.get("DOCUGEN_IMAGE_MODEL", "Tongyi-MAI/Z-Image-Turbo")            # 8-step photoreal DiT
 VIDEO_MODEL = os.environ.get("DOCUGEN_VIDEO_MODEL", "magespace/Wan2.2-I2V-A14B-Lightning-Diffusers")  # 4-step I2V
-TTS_REPO = "hexgrad/Kokoro-82M"                                                              # 82M, faster than real time on CPU
+TTS_REPO = "hexgrad/Kokoro-82M"                                                              # 82M params, runs on a T4
 
 # --------------------------------------------------------------------------- output
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
@@ -19,9 +19,9 @@ VIDEO_STEPS = 4                        # Lightning distillation
 MOTION_SECONDS = VIDEO_FRAMES / VIDEO_FPS
 
 # --------------------------------------------------------------------------- pacing
-WORDS_PER_SECOND = 2.6                 # Kokoro at SPEECH_SPEED reads ~155 words a minute
-SPEECH_SPEED = 1.05
-MAX_SPEECH_SPEED = 1.3                 # narration is re-voiced faster (up to this) if it overshoots the length
+WORDS_PER_SECOND = 2.3                 # measured: Kokoro (bm_george) at SPEECH_SPEED, incl. pauses
+SPEECH_SPEED = 1.15
+MAX_SPEECH_SPEED = 1.35                # narration is re-voiced faster (up to this) if it overshoots the length
 SHOT_SECONDS = 3.2                     # target length of one still shot -> a new picture every ~3 s
 MAX_SHOTS_PER_SCENE = 5
 XFADE = 0.3                            # cross-dissolve between shots
@@ -31,7 +31,7 @@ CARD_SECONDS = 2.6                     # title and end cards
 STYLES = {
     "cinematic": {
         "label": "Cinematic photo",
-        "prompt": "cinematic documentary photograph, shot on Arri Alexa, 35mm lens, natural light, rich color grading, "
+        "prompt": "cinematic documentary photograph, natural light, rich color grading, shallow depth of field, "
                   "sharp focus, highly detailed, realistic textures, professional photography",
     },
     "archival": {
@@ -51,6 +51,7 @@ STYLES = {
     },
 }
 NEGATIVE_PROMPT = "text, watermark, logo, letters, blurry, low quality, deformed, cartoon"
+CLEAN_SUFFIX = "no visible text, no lettering, no signage, no logos, no cameras or film equipment in frame"
 
 VOICES = {  # Kokoro-82M voices
     "bm_george": "Deep British male (documentary)",
