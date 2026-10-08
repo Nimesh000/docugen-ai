@@ -14,7 +14,7 @@ def make(tmp_path, monkeypatch, code="", limit=2):
 
 def test_create_job_and_daily_limit(tmp_path, monkeypatch):
     client, store, spawned = make(tmp_path, monkeypatch)
-    body = {"topic": "The rise of India's UPI", "seconds": 120}
+    body = {"topic": "The rise of India's UPI", "seconds": 60, "scenes": 6, "motion": 2}
     r = client.post("/api/jobs", json=body)
     assert r.status_code == 200
     jid = r.json()["id"]
@@ -29,7 +29,12 @@ def test_access_code_and_validation(tmp_path, monkeypatch):
     assert client.get("/api/config").json()["access_required"] is True
     assert client.post("/api/jobs", json={"topic": "x topic", "code": "nope"}).status_code == 403
     assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "seconds": 999}).status_code == 400
+    assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "scenes": 3,
+                                          "motion": 4}).status_code == 400
+    assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "scenes": 20}).status_code == 422
     assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026"}).status_code == 200
+    cfg = client.get("/api/config").json()
+    assert cfg["scenes"]["max"] == 12 and cfg["default_voice"] in cfg["voices"]
 
 
 def test_file_serving_is_sandboxed(tmp_path, monkeypatch):
