@@ -39,7 +39,7 @@ class FakeBackend:
     def narrate(self, texts, voice, speed):
         for t in texts:
             toks = t.split()
-            secs = max(2.0, len(toks) / 2.6)
+            secs = max(2.0, len(toks) / (2.6 * speed / 1.05))
             with tempfile.TemporaryDirectory() as d:
                 p = Path(d) / "v.wav"
                 subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
