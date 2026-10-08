@@ -21,8 +21,11 @@ def font_path(weight: str) -> str | None:
     for d in FONT_DIRS:
         for name in FONT_FILES[weight]:
             p = Path(d) / name
-            if p.exists():
-                return str(p)
+            try:
+                if p.is_file():
+                    return str(p)
+            except OSError:  # e.g. /root not readable for non-root users
+                continue
     return None
 
 
