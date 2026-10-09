@@ -14,7 +14,7 @@ def make(tmp_path, monkeypatch, code="", limit=2):
 
 def test_create_job_and_daily_limit(tmp_path, monkeypatch):
     client, store, spawned = make(tmp_path, monkeypatch)
-    body = {"topic": "The rise of India's UPI", "seconds": 60, "scenes": 6, "motion": 2}
+    body = {"topic": "The rise of India's UPI", "seconds": 60, "scenes": 6, "motion": 2, "tone": "dramatic"}
     r = client.post("/api/jobs", json=body)
     assert r.status_code == 200
     jid = r.json()["id"]
@@ -31,10 +31,19 @@ def test_access_code_and_validation(tmp_path, monkeypatch):
     assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "seconds": 999}).status_code == 400
     assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "scenes": 3,
                                           "motion": 4}).status_code == 400
-    assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "scenes": 20}).status_code == 422
+    assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "scenes": 25}).status_code == 422
+    assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "format": "reel", "seconds": 60,
+                                          "scenes": 12}).status_code == 400        # reels allow up to 8 scenes
+    assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026", "tone": "angry"}).status_code == 400
     assert client.post("/api/jobs", json={"topic": "x topic", "code": "UPI2026"}).status_code == 200
     cfg = client.get("/api/config").json()
-    assert cfg["scenes"]["max"] == 12 and cfg["default_voice"] in cfg["voices"]
+    assert cfg["formats"]["long"]["scenes"]["max"] == 20 and cfg["formats"]["reel"]["aspect"] == "9:16"
+    assert cfg["default_voice"] in cfg["voices"] and "economy" in cfg["render"]
+    reel = client.post("/api/jobs", json={"topic": "a reel topic", "code": "UPI2026", "format": "reel", "seconds": 30,
+                                          "scenes": 5, "motion": 1})
+    assert reel.status_code == 200
+    est = client.post("/api/estimate", json={"topic": "a reel topic", "format": "reel", "seconds": 30, "scenes": 5})
+    assert est.status_code == 200 and est.json()["usd"] > 0
 
 
 def test_file_serving_is_sandboxed(tmp_path, monkeypatch):

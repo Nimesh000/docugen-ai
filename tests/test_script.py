@@ -6,7 +6,9 @@ from docugen.script import normalize, parse_json, targets, to_markdown
 def test_targets_follow_scene_choice():
     assert targets(60)[0] < targets(120)[0]
     assert targets(60, scenes=8)[0] == 8
-    assert targets(60, scenes=99)[0] == 12
+    assert targets(60, scenes=99)[0] == 20
+    assert targets(30, scenes=99, format="reel")[0] == 8
+    assert targets(30, format="reel")[1] < targets(30)[1] + 10
     assert targets(120)[1] > targets(60)[1]
 
 

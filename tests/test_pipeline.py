@@ -50,3 +50,46 @@ def test_full_pipeline(tmp_path):
     durs = probe(out / "documentary.mp4")
     assert abs(durs["video"] - durs["audio"]) < 0.15
     assert abs(durs["video"] - state["duration"]) < 0.2
+
+
+def test_reel_pipeline_is_vertical_with_hook(tmp_path):
+    params = {"topic": "UPI", "format": "reel", "seconds": 15, "scenes": 3, "motion": 1, "captions": "pop",
+              "music": "uplifting", "tone": "dramatic"}
+    store = {}
+    backend = FakeBackend(fail_motion_index=None)
+    status = pipeline.Status(store, "reel1", pipeline.new_state("reel1", params))
+    ok = pipeline.run(params, tmp_path, backend, status)
+    state = store["reel1"]
+    assert ok, state["error"]
+    assert backend.image_size == (864, 1536)
+    assert all("director shot" in p for p in backend.prompts)            # Visual Director prompts were used
+    assert "vertical" in backend.prompts[0]
+    assert backend.brief["format"] == "reel" and backend.brief["tone"] == "dramatic"
+    data = json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
+                                      "stream=width,height", "-of", "json", str(tmp_path / "output/documentary.mp4")],
+                                     capture_output=True, text=True).stdout)["streams"][0]
+    assert (data["width"], data["height"]) == (1080, 1920)
+    ass = (tmp_path / "work/subs.ass").read_text()
+    assert "Hook,," in ass and "\\c&H4BB0E8&" in ass                     # title hook + word highlight
+    assert not (tmp_path / "work/title.png").exists()                     # reels start straight on the story
+    assert state["fact_check"] == ["Corrected a launch year"]
+    assert state["cost"]["usd"] > 0 and state["estimate"]["usd"] > 0
+    assert state["director"]["bible"]["places"] == ["Mumbai"]
+
+
+def test_group_clips_keeps_duration(tmp_path):
+    from docugen import media
+
+    clips = []
+    for k in range(7):
+        p = tmp_path / f"c{k}.mp4"
+        dur = 1.0 + (0.3 if k < 6 else 0)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"color=c=0x{k * 30:02x}4060:s=320x180:d={dur}",
+                        "-r", "30", "-pix_fmt", "yuv420p", str(p)], check=True)
+        clips.append((p, 1.0))
+    grouped = media.group_clips(tmp_path, clips, 0.3, size=3, threshold=0)
+    assert len(grouped) == 3 and [d for _, d in grouped] == [3.0, 3.0, 1.0]
+    inputs, join = media.xfade_chain(grouped, 0.3)
+    out = tmp_path / "joined.mp4"
+    media.run([*inputs, "-filter_complex", join, "-map", "[vx]", "-pix_fmt", "yuv420p", out])
+    assert abs(media.duration(out) - 7.0) < 0.1
