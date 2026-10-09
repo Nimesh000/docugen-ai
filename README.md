@@ -1,18 +1,24 @@
 # DocuGen AI 🎬
 
-**Type a topic, get a narrated documentary.** DocuGen AI chains open AI models on serverless GPUs. They write,
-narrate, illustrate and animate a 30 second to 2 minute documentary, which FFmpeg then cuts with captions and a music score.
+**Type a topic, get a film.** DocuGen AI chains open AI models and two LLM agents on serverless GPUs. They write,
+fact-check, narrate, design, illustrate and animate either a **9:16 reel (15–60 s)** or a **16:9 long video (1–5 min)**,
+which FFmpeg then cuts with captions and a music score.
 
 **Live demo:** https://nimeshgoyal02--docugen.modal.run (access code required, limited number of films per day)
 
 | Step | Model | Runs on |
 |---|---|---|
-| Script (title, scenes, 4 shot ideas per scene) | GPT-OSS 120B via Groq (auto-fallback to any available model) | Groq API (free tier) |
-| Narration + word timestamps | Kokoro-82M | Modal T4 GPU (~50x faster than real time) |
-| Shot images | Z-Image Turbo (6B, 8 steps) | Modal L40S GPUs, up to 4 in parallel |
-| Animated hero shots | Wan 2.2 I2V A14B + Lightning (4 steps) | Modal H200 GPUs, up to 4 in parallel |
-| Captions | straight from the TTS word timings | Modal CPU |
+| Script + fact-check pass | GPT-OSS 120B via Groq (auto-fallback to any available model) | Groq API (free tier) |
+| Visual Director agent (shot + motion prompts, visual bible, critic) | GPT-OSS 120B via Groq | Groq API, runs while the voice records |
+| Narration + word timestamps | Kokoro-82M (8 voices) | Modal T4 GPU (~50x faster than real time) |
+| Shot images | Z-Image Turbo (6B, 8 steps), 1536x864 or 864x1536 | Modal L40S GPUs, 2 (economy) or 4 (fast) in parallel |
+| Animated hero shots | Wan 2.2 I2V A14B + Lightning (4 steps) | Modal H200 GPUs, 1 (economy) or up to 4 (fast) |
+| Captions | straight from the TTS word timings (clean or word-by-word "pop") | Modal CPU |
 | Editing | FFmpeg (eased Ken Burns, cross-dissolves, ducking, loudness) | Modal CPU |
+
+**Customise on the web page:** format, length, scenes, animated hero shots, pacing, tone, audience, key points to
+cover, 8 visual styles, 8 narrators, music mood, caption style, fact-check on/off, and economy vs fast rendering.
+A live estimate shows shots, time and GPU cost before you start; the measured bill is shown after the film.
 
 ```mermaid
 flowchart LR
@@ -34,25 +40,30 @@ flowchart LR
 
 ## How it works
 
-1. **Script.** You pick the length, the number of scenes and how many of them open with an animated shot. The LLM
-   returns strict JSON: title, logline, and for every scene the narration, four shot ideas (wide, medium, close-up,
-   another angle) and a motion description. Python validates and repairs it.
-2. **Narration first.** Kokoro reads every scene in a few seconds on a small GPU and returns word timestamps. Knowing the
-   exact length of every scene lets the editor plan the cut before any image exists.
-3. **Shot plan.** Every scene is cut into ~3 second shots, so the picture keeps changing. Hero scenes open with a
-   5 second video clip.
-4. **Images and motion overlap.** Z-Image Turbo paints all shots on up to four GPUs, hero stills first. Each hero
-   still is sent to Wan 2.2 the moment it is ready, so animation runs while the remaining stills are painted.
-   The GPU containers are started while the script is being written, so model loading is hidden.
-5. **Edit.** FFmpeg gives every still an eased zoom, pan or tilt, joins all shots with short cross-dissolves, adds
-   title and end cards, word-timed captions and a generated music score that ducks under the voice, and normalises
-   loudness to −15 LUFS, in a single final encode.
+1. **Script + fact-check.** The LLM returns strict JSON (title, logline, narration per scene, fallback shot ideas)
+   shaped by the format, tone, audience and any key points; reels get a 3-second hook and punchy lines. A second
+   pass checks every claim and corrects or softens anything doubtful (the corrections are listed on the job page).
+2. **Narration and the Visual Director run in parallel.** Kokoro voices every scene with word timestamps. Meanwhile the
+   Visual Director agent (`docugen/director.py`) reads the whole story, fixes a *visual bible* (era, places, palette,
+   recurring characters with a fixed look, a motif) and writes exactly as many shot prompts per scene as the edit
+   needs, following a shot grammar (wide → medium → detail → reaction, never the same framing twice) and a prompt
+   recipe tuned for Z-Image Turbo and Wan 2.2. A rule-based critic flags prompts that would render garbled text,
+   miss the place or era, or are too vague; only those go back to the LLM for repair.
+3. **Shot plan.** Scenes are cut into short shots (about 2.4 s for reels, 4 s for long videos, adjustable pacing).
+   Hero scenes open with a 5 second video clip.
+4. **Images and motion overlap.** Z-Image Turbo paints all shots, hero stills first. Each hero still goes to Wan 2.2
+   the moment it is ready, so animation runs while the remaining stills are painted.
+5. **Edit.** FFmpeg gives every still an eased zoom, pan or tilt, joins all shots with short cross-dissolves (in
+   groups for long films), adds cards (reels open with a title hook instead), captions and a generated music score
+   (ambient, uplifting or tense) that ducks under the voice, and normalises loudness to −15 LUFS.
 
 If an animation fails, that shot falls back to a Ken Burns move, and a failed image reuses the previous picture,
 so a film always finishes.
 
-**Speed:** a 1 minute film takes about 3–5 minutes once the GPUs are warm. **Cost:** roughly $0.50–1.00 per film on
-Modal (mostly the H200 time for animated shots). Use fewer hero shots for cheaper, faster films.
+**Keeping cost low.** Model loading is the biggest GPU cost, so *economy* mode caps the number of GPU containers
+(each extra container loads the model again), containers scale down 40–45 s after their last call, and the GPU
+classes measure their own load and busy time so every film reports its real cost (`docugen/cost.py`, Modal's
+per-second prices). Animated hero shots on H200 are most of the bill; stills, voice and editing cost cents.
 
 ## Deploy your own (about 5 minutes)
 
@@ -80,6 +91,7 @@ renders a short test film and prints the timing of every stage.
 
 ```bash
 modal run docugen/modal_app.py --topic "How coffee conquered the world" --seconds 60 --scenes 6 --motion 2
+modal run docugen/modal_app.py --topic "Why octopuses are so smart" --format reel --seconds 30 --motion 1
 modal volume get docugen-jobs <job_id>/output ./my-film
 ```
 
@@ -100,7 +112,9 @@ pytest -q                                    # script validation, web API, full 
 docugen/
 ├── modal_app.py      Modal: images, volumes, GPU classes, orchestrator, web endpoint, CLI entrypoint
 ├── pipeline.py       stage runner, shot planner, live status (backend-agnostic)
-├── script.py         LLM prompt, JSON validation & repair
+├── script.py         writer + fact-checker prompts, JSON validation & repair
+├── director.py       Visual Director agent: visual bible, shot prompts, motion prompts, critic + repair
+├── cost.py           cost estimate before a run and measured bill after it
 ├── tts.py            Kokoro narration with word timestamps
 ├── media.py          FFmpeg: eased Ken Burns, motion fitting, cross-dissolves, final mix
 ├── captions.py       caption grouping -> SRT / styled ASS
