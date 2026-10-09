@@ -154,6 +154,14 @@ def create_app(store, spawn: Callable[[str, dict], None], jobs_root: Path,
     def health() -> dict:
         return {"ok": True, "time": time.time()}
 
+    @app.middleware("http")
+    async def revalidate_static(request, call_next):
+        """Make browsers re-check the page, script and styles after every deploy (they are tiny)."""
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
     return app
 
