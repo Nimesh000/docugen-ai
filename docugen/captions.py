@@ -33,7 +33,8 @@ def build_cues(groups: list[list[dict]], max_words: int = 7, max_seconds: float 
             if current:
                 text = " ".join(w["w"] for w in current if w["w"]).strip()
                 if text:
-                    cues.append({"start": current[0]["s"], "end": current[-1]["e"], "text": text})
+                    cues.append({"start": current[0]["s"], "end": current[-1]["e"], "text": text,
+                                 "words": [dict(w) for w in current if w["w"]]})
                 current.clear()
 
         for i, w in enumerate(words):
@@ -61,12 +62,29 @@ def write_srt(cues: list[dict], path: Path) -> None:
     path.write_text("\n".join(blocks), encoding="utf-8")
 
 
+def _ass_text(t: str) -> str:
+    return t.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
 def write_ass(cues: list[dict], path: Path, width: int, height: int, font: str = "Inter",
-              font_size: int = 54) -> None:
-    scale = height / 1080
-    size = int(font_size * scale)
-    margin_v = int(80 * scale)
-    outline = max(2, int(3 * scale))
+              font_size: int = 54, style: str = "clean", hook: tuple[str, float, float] | None = None) -> None:
+    """style 'clean': classic subtitles at the bottom. style 'pop': big bold captions in the lower third with the
+    spoken word highlighted (karaoke), the way short-form videos do it. hook: (text, start, end) title shown at
+    the top of the frame (used by reels, which have no title card)."""
+    base = min(width, height) / 1080
+    gold = "&H4BB0E8&"                # #E8B04B in ASS BGR order
+    if style == "pop":
+        size = int((86 if height > width else 64) * base)
+        margin_v = int(height * (0.26 if height > width else 0.12))
+        default = (f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,"
+                   f"{max(3, int(6 * base))},{max(1, int(2 * base))},2,{int(70 * base)},{int(70 * base)},{margin_v},1")
+    else:
+        size = int(font_size * base)
+        default = (f"Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00101010,&H64000000,-1,0,0,0,100,100,0,0,1,"
+                   f"{max(2, int(3 * base))},1,2,{int(160 * base)},{int(160 * base)},{int(80 * base)},1")
+    hook_size = int((92 if height > width else 70) * base)
+    hook_style = (f"Style: Hook,{font},{hook_size},&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,3,"
+                  f"{max(8, int(18 * base))},0,8,{int(80 * base)},{int(80 * base)},{int(height * 0.11)},1")
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -76,15 +94,30 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00101010,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},1,2,{int(160 * scale)},{int(160 * scale)},{margin_v},1
+{default}
+{hook_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
+    if hook and hook[0]:
+        lines.append(f"Dialogue: 1,{fmt_ass_time(hook[1])},{fmt_ass_time(hook[2])},Hook,,0,0,0,,"
+                     f"{{\\fad(250,350)}}{_ass_text(hook[0]).upper()}")
     for c in cues:
-        text = c["text"].replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
-        lines.append(f"Dialogue: 0,{fmt_ass_time(c['start'])},{fmt_ass_time(c['end'])},Default,,0,0,0,,{text}")
+        words = c.get("words") or []
+        if style == "pop" and words:
+            for k, w in enumerate(words):        # one event per spoken word, that word highlighted
+                start = c["start"] if k == 0 else w["s"]
+                end = words[k + 1]["s"] if k + 1 < len(words) else c["end"]
+                if end <= start:
+                    continue
+                parts = [(f"{{\\c{gold}\\fscx108\\fscy108}}{_ass_text(x['w']).upper()}{{\\r}}" if i == k
+                          else _ass_text(x["w"]).upper()) for i, x in enumerate(words)]
+                lines.append(f"Dialogue: 0,{fmt_ass_time(start)},{fmt_ass_time(end)},Default,,0,0,0,,{' '.join(parts)}")
+        else:
+            lines.append(f"Dialogue: 0,{fmt_ass_time(c['start'])},{fmt_ass_time(c['end'])},Default,,0,0,0,,"
+                         f"{_ass_text(c['text'])}")
     path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
 
 

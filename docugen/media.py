@@ -8,8 +8,9 @@ from . import config
 from .ffmpeg import run
 
 FPS = config.FPS
-W, H = config.WIDTH, config.HEIGHT
+LONG = config.FORMATS["long"]
 VENC = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS)]
+GROUP = 18                   # clips per intermediate file when a film has many shots (keeps FFmpeg memory flat)
 
 
 def duration(path: Path) -> float:
@@ -48,11 +49,12 @@ _MOVES = [
     (1.20, 1.20, 0.5, 0.5, 1.0, 0.1),    # tilt up
     (1.25, 1.05, 0.7, 0.4, 0.3, 0.5),    # diagonal pull back
 ]
-KB_W, KB_H = 3200, 1800      # supersampled canvas -> sub-pixel smooth motion at 1080p
 
 
-def ken_burns(image: Path, dst: Path, seconds: float, move: int) -> None:
-    """Animate a still with a clearly visible, eased zoom / pan."""
+def ken_burns(image: Path, dst: Path, seconds: float, move: int, size=LONG["size"], kb=LONG["kb"]) -> None:
+    """Animate a still with a clearly visible, eased zoom / pan (supersampled canvas -> sub-pixel smooth motion)."""
+    W, H = size
+    KB_W, KB_H = kb
     n = max(2, round(seconds * FPS))
     z0, z1, x0, x1, y0, y1 = (1.0, 1.05, 0.5, 0.5, 0.5, 0.5) if move < 0 else _MOVES[move % len(_MOVES)]
     e = f"(0.5-0.5*cos(PI*on/{n - 1}))"
@@ -64,8 +66,9 @@ def ken_burns(image: Path, dst: Path, seconds: float, move: int) -> None:
     run(["-i", image, "-vf", vf, "-frames:v", str(n), *VENC, "-an", dst])
 
 
-def motion_clip(src: Path, dst: Path, seconds: float) -> None:
+def motion_clip(src: Path, dst: Path, seconds: float, size=LONG["size"]) -> None:
     """Fit a generated clip to its slot: gentle speed change (at most 1.35x slower), upscale, smooth 30 fps."""
+    W, H = size
     clip = duration(src)
     stretch = min(1.35, max(0.85, seconds / clip))
     hold = max(0.0, seconds - clip * stretch)
@@ -90,6 +93,26 @@ def xfade_chain(clips: list[tuple[Path, float]], xfade: float) -> tuple[list[str
     return inputs, ";".join(fc)
 
 
+def group_clips(work: Path, clips: list[tuple[Path, float]], xfade: float, size: int = GROUP,
+                threshold: int = 24) -> list[tuple[Path, float]]:
+    """Long films have 60+ shots. Join them in groups first so the final graph has few inputs. A group behaves
+    exactly like one clip: its display time is the sum of its clips and it keeps the `xfade` tail for the next join."""
+    if len(clips) <= threshold:
+        return clips
+    out = []
+    for g, start in enumerate(range(0, len(clips), size)):
+        part = clips[start:start + size]
+        last_overall = start + size >= len(clips)
+        inputs, join = xfade_chain(part, xfade)
+        display = sum(d for _, d in part)
+        length = display + (0 if last_overall else xfade)
+        dst = work / f"group_{g:02d}.mp4"
+        run([*inputs, "-filter_complex", join + ";[vx]setpts=PTS-STARTPTS[v]", "-map", "[v]", "-t", f"{length:.4f}",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", "-r", str(FPS), "-an", dst])
+        out.append((dst, display))
+    return out
+
+
 def concat_list(paths: list[Path], dst: Path) -> Path:
     dst.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in paths), encoding="utf-8")
     return dst
@@ -99,6 +122,7 @@ def final_mix(work: Path, clips: list[tuple[Path, float]], xfade: float, audio_l
               total: float, cards: list[tuple[float, float]], subs: Path | None, out_video: Path, out_audio: Path,
               on_progress=None, log=None) -> None:
     """One encode: cross-dissolve join + captions + narration + ducked music + loudness normalisation."""
+    clips = group_clips(work, clips, xfade)
     inputs, join = xfade_chain(clips, xfade)
     na = len(clips)                      # input index of the narration
     inputs += ["-f", "concat", "-safe", "0", "-i", str(audio_list)]

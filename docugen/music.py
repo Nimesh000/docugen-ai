@@ -5,13 +5,22 @@ import subprocess
 import wave
 from pathlib import Path
 
-def _synth_loop(path: Path, seconds_per_bar: float = 60 / 72 * 4, bars: int = 16, sr: int = 44100) -> None:
+MOODS = {
+    # bpm, chord progression (MIDI notes), arpeggio notes per bar, low pulse per beat (0 = none)
+    "ambient": (72, [[48, 55, 59, 64, 67], [45, 52, 55, 60, 64], [41, 48, 52, 57, 64], [43, 50, 55, 59, 64]], 8, 0.0),
+    "uplifting": (96, [[50, 57, 62, 66, 69], [45, 52, 57, 61, 64], [47, 54, 59, 62, 66], [43, 50, 55, 59, 62]], 8, 0.05),
+    "tense": (64, [[45, 52, 57, 60, 64], [41, 48, 53, 57, 60], [38, 45, 50, 53, 57], [40, 47, 52, 56, 59]], 4, 0.08),
+}
+
+
+def _synth_loop(path: Path, mood: str = "ambient", bars: int = 16, sr: int = 44100) -> None:
     import numpy as np
 
     def hz(m: int) -> float:
         return 440 * 2 ** ((m - 69) / 12)
 
-    prog = [[48, 55, 59, 64, 67], [45, 52, 55, 60, 64], [41, 48, 52, 57, 64], [43, 50, 55, 59, 64]]
+    bpm, prog, arps, pulse = MOODS.get(mood, MOODS["ambient"])
+    seconds_per_bar = 60 / bpm * 4
     beat = seconds_per_bar / 4
     n = int(bars * seconds_per_bar * sr)
     out = np.zeros((n, 2))
@@ -26,9 +35,15 @@ def _synth_loop(path: Path, seconds_per_bar: float = 60 / 72 * 4, bars: int = 16
         pan = np.array([0.9, 1.0]) if b % 2 else np.array([1.0, 0.9])
         end = min(n, i0 + len(t_bar))
         out[i0:end] += pad[: end - i0, None] * pan
-        for k in range(8):  # soft plucked arpeggio
-            m = chord[[1, 2, 3, 4, 3, 2, 3, 4][k]] + 12
-            st = i0 + int(k * beat / 2 * sr)
+        if pulse:  # soft low heartbeat on every beat
+            for q in range(4):
+                st = i0 + int(q * beat * sr)
+                tt = np.arange(min(int(0.5 * sr), n - st)) / sr
+                kick = np.sin(2 * np.pi * (hz(chord[0] - 12) + 40 * np.exp(-tt * 30)) * tt) * np.exp(-tt * 9) * pulse
+                out[st:st + len(tt)] += kick[:, None]
+        for k in range(arps):  # soft plucked arpeggio
+            m = chord[[1, 2, 3, 4, 3, 2, 3, 4][k % 8]] + 12
+            st = i0 + int(k * seconds_per_bar / arps * sr)
             tt = np.arange(min(int(1.2 * sr), n - st)) / sr
             pl = np.sin(2 * np.pi * hz(m) * tt) * np.exp(-tt * 3.5) * 0.06 * (0.7 + 0.3 * rng.random())
             p = 0.3 + 0.4 * (k % 2)
@@ -52,12 +67,12 @@ def _synth_loop(path: Path, seconds_per_bar: float = 60 / 72 * 4, bars: int = 16
 
 
 
-def make_music(path: Path) -> Path:
+def make_music(path: Path, mood: str = "ambient") -> Path:
     """Create the loop as MP3 next to `path` (cached)."""
     if path.exists():
         return path
     wav = path.with_suffix(".wav")
-    _synth_loop(wav)
+    _synth_loop(wav, mood)
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-af", "lowpass=f=9000",
                     "-c:a", "libmp3lame", "-b:a", "160k", str(path)], check=True)
     wav.unlink(missing_ok=True)
