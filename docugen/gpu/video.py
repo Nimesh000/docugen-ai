@@ -20,19 +20,19 @@ class Animator:
         self.device = device
         self.cfg = config
 
-    def animate(self, image_bytes: bytes, prompt: str, seed: int) -> bytes:
+    def animate(self, image_bytes: bytes, prompt: str, seed: int, width: int = 960, height: int = 544) -> bytes:
         from diffusers.utils import export_to_video
         from PIL import Image, ImageOps
 
         cfg = self.cfg
-        image = ImageOps.fit(Image.open(io.BytesIO(image_bytes)).convert("RGB"), (cfg.VIDEO_W, cfg.VIDEO_H),
+        image = ImageOps.fit(Image.open(io.BytesIO(image_bytes)).convert("RGB"), (width, height),
                              Image.LANCZOS)
         g = self.torch.Generator(device=self.device).manual_seed(seed)
         with self.torch.inference_mode():
             frames = self.pipe(
-                image=image, prompt=prompt + ", smooth natural motion, cinematic, realistic",
-                negative_prompt="static, frozen, blurry, distorted, morphing, text, watermark",
-                width=cfg.VIDEO_W, height=cfg.VIDEO_H, num_frames=cfg.VIDEO_FRAMES,
+                image=image, prompt=prompt + ", smooth natural motion, stable consistent subject, cinematic",
+                negative_prompt="static, frozen, blurry, distorted, morphing, extra limbs, flicker, scene cut, text, watermark",
+                width=width, height=height, num_frames=cfg.VIDEO_FRAMES,
                 num_inference_steps=cfg.VIDEO_STEPS, guidance_scale=1.0, guidance_scale_2=1.0, generator=g,
             ).frames[0]
         fd, path = tempfile.mkstemp(suffix=".mp4")

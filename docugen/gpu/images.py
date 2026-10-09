@@ -16,11 +16,11 @@ class Painter:
         self.device = device
         self.cfg = config
 
-    def paint(self, prompt: str, seed: int) -> bytes:
+    def paint(self, prompt: str, seed: int, width: int = 1536, height: int = 864) -> bytes:
         cfg = self.cfg
         g = self.torch.Generator(device=self.device).manual_seed(seed)
         with self.torch.inference_mode():
-            image = self.pipe(prompt=prompt, width=cfg.IMAGE_W, height=cfg.IMAGE_H,
+            image = self.pipe(prompt=prompt, width=width, height=height,
                               num_inference_steps=cfg.IMAGE_STEPS, guidance_scale=0.0, generator=g).images[0]
         buf = io.BytesIO()
         image.save(buf, format="JPEG", quality=94)
