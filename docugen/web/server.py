@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .. import config
+from .. import config, cost
 from ..pipeline import new_state
 
 STATIC = Path(__file__).parent / "static"
@@ -22,14 +22,44 @@ ALLOWED_EXT = {".png", ".jpg", ".mp4", ".wav", ".srt", ".md", ".json"}
 
 class JobRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=config.MAX_TOPIC_CHARS)
+    format: str = config.DEFAULT_FORMAT
     seconds: int = 60
-    scenes: int = Field(default=6, ge=config.MIN_SCENES, le=config.MAX_SCENES)
+    scenes: int = Field(default=5, ge=config.MIN_SCENES, le=config.MAX_SCENES)
+    motion: int = Field(default=2, ge=0, le=config.MAX_HEROES)
     style: str = "cinematic"
     voice: str = config.DEFAULT_VOICE
-    motion: int = Field(default=2, ge=0, le=config.MAX_HEROES)
-    music: bool = True
-    subtitles: bool = True
+    tone: str = "informative"
+    audience: str = "general"
+    pacing: str = "balanced"
+    captions: str = ""
+    music: str = "ambient"
+    render: str = "economy"
+    fact_check: bool = True
+    key_points: str = Field(default="", max_length=config.MAX_KEY_POINTS_CHARS)
     code: str = ""
+
+
+def validate(req: JobRequest) -> str | None:
+    """Return an error message, or None if the request is valid."""
+    if req.format not in config.FORMATS:
+        return "Unknown format."
+    f = config.FORMATS[req.format]
+    if req.seconds not in f["lengths"]:
+        return "Unsupported length for this format."
+    lo, hi = f["scenes"]
+    if not lo <= req.scenes <= hi:
+        return f"Choose between {lo} and {hi} scenes for this format."
+    if req.motion > min(req.scenes, f["max_heroes"]):
+        return "Too many animated shots for the number of scenes."
+    checks = [(req.style, config.STYLES, "style"), (req.voice, config.VOICES, "voice"), (req.tone, config.TONES, "tone"),
+              (req.audience, config.AUDIENCES, "audience"), (req.pacing, config.PACING, "pacing"),
+              (req.music, config.MUSIC, "music"), (req.render, config.RENDER_MODES, "render mode")]
+    if req.captions:
+        checks.append((req.captions, config.CAPTIONS, "caption style"))
+    for value, allowed, name in checks:
+        if value not in allowed:
+            return f"Unknown {name}."
+    return None
 
 
 def create_app(store, spawn: Callable[[str, dict], None], jobs_root: Path,
@@ -43,40 +73,47 @@ def create_app(store, spawn: Callable[[str, dict], None], jobs_root: Path,
     @app.get("/api/config")
     def get_config() -> dict:
         used = store.get(today_key(), 0) or 0
+        formats = {k: {"label": f["label"], "aspect": f["aspect"], "hint": f["hint"], "lengths": f["lengths"],
+                       "default_seconds": f["default_seconds"], "scenes": {"min": f["scenes"][0], "max": f["scenes"][1]},
+                       "default_scenes": {s: config.default_scenes(s, k) for s in f["lengths"]},
+                       "max_heroes": f["max_heroes"], "captions": f["captions"]} for k, f in config.FORMATS.items()}
         return {
+            "formats": formats, "default_format": config.DEFAULT_FORMAT,
             "styles": {k: v["label"] for k, v in config.STYLES.items()},
-            "voices": config.VOICES,
-            "lengths": config.LENGTHS,
-            "default_voice": config.DEFAULT_VOICE,
-            "scenes": {"min": config.MIN_SCENES, "max": config.MAX_SCENES,
-                       "default": {s: config.default_scenes(s) for s in config.LENGTHS}},
-            "max_heroes": config.MAX_HEROES,
+            "voices": config.VOICES, "default_voice": config.DEFAULT_VOICE,
+            "tones": {k: v[0] for k, v in config.TONES.items()},
+            "audiences": {k: v[0] for k, v in config.AUDIENCES.items()},
+            "pacing": {k: v[0] for k, v in config.PACING.items()},
+            "captions": config.CAPTIONS, "music": config.MUSIC,
+            "render": {k: {"label": v["label"], "hint": v["hint"]} for k, v in config.RENDER_MODES.items()},
+            "max_key_points": config.MAX_KEY_POINTS_CHARS,
             "access_required": bool(config.ACCESS_CODE),
             "daily_limit": config.DAILY_LIMIT,
             "used_today": used,
         }
 
+    @app.post("/api/estimate")
+    def estimate(req: JobRequest) -> dict:
+        return cost.estimate(req.model_dump(exclude={"code"}))
+
     @app.post("/api/jobs")
     def create_job(req: JobRequest) -> dict:
         if config.ACCESS_CODE and not hmac.compare_digest(req.code.strip().encode(), config.ACCESS_CODE.encode()):
             raise HTTPException(403, "Wrong access code. Ask the owner of this demo for the code.")
-        if req.seconds not in config.LENGTHS:
-            raise HTTPException(400, "Unsupported length.")
-        if req.style not in config.STYLES:
-            raise HTTPException(400, "Unknown style.")
-        if req.voice not in config.VOICES:
-            raise HTTPException(400, "Unknown voice.")
-        if req.motion > req.scenes:
-            raise HTTPException(400, "There can't be more animated shots than scenes.")
+        problem = validate(req)
+        if problem:
+            raise HTTPException(400, problem)
         key = today_key()
         used = store.get(key, 0) or 0
         if used >= config.DAILY_LIMIT:
-            raise HTTPException(429, f"Today's limit of {config.DAILY_LIMIT} documentaries is used up. "
+            raise HTTPException(429, f"Today's limit of {config.DAILY_LIMIT} films is used up. "
                                      "Please try again tomorrow (UTC).")
         store[key] = used + 1
         job_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         params = req.model_dump(exclude={"code"})
         params["topic"] = " ".join(params["topic"].split())
+        params["key_points"] = " ".join(params["key_points"].split())
+        params["captions"] = params["captions"] or config.FORMATS[req.format]["captions"]
         store[job_id] = new_state(job_id, params)
         spawn(job_id, params)
         return {"id": job_id}
@@ -95,7 +132,8 @@ def create_app(store, spawn: Callable[[str, dict], None], jobs_root: Path,
             s = store.get(jid)
             if s and s.get("status") == "done":
                 out.append({"id": jid, "title": s.get("title"), "logline": s.get("logline"),
-                            "duration": s.get("duration"), "created_at": s.get("created_at")})
+                            "duration": s.get("duration"), "created_at": s.get("created_at"),
+                            "format": s.get("format") or "long", "cost": (s.get("cost") or {}).get("usd")})
         return out
 
     @app.get("/api/jobs/{job_id}/files/{path:path}")
