@@ -9,44 +9,59 @@ import time
 from . import config
 
 SYSTEM_PROMPT = """You are an award-winning documentary writer and director.
-Write a short narrated documentary as JSON. Rules:
+Write a narrated documentary as JSON. Rules:
 - Narration is vivid, confident and factual, with concrete, well-established details: key years, places,
-  institutions, inventions, turning points. No vague filler ("a quiet revolution began"). If unsure of a number, leave it out.
+  institutions, inventions, turning points. No vague filler ("a quiet revolution began"). Only state facts you are
+  sure of; if unsure of a number, name or date, leave it out rather than guess.
 - Scene 1 is a strong hook. Each scene moves the story forward. The last scene closes with a memorable line.
 - Each scene has one narration paragraph of plain spoken sentences (no headings, stage directions, emojis or lists).
-- "shots" are 4 different photographs that illustrate that scene's narration, in order: wide establishing shot,
-  medium shot of people, close-up of hands / faces / textures, and another angle. Each is ONE concrete image
-  description for an image generator: subject, action, setting, era, lighting, camera angle.
-  Every shot is generated on its own, so EACH shot must restate the country/city, era and who is in it
-  (e.g. "Indian shopkeeper in a Mumbai market, 2018"), never just "the vendor" or "people".
-  The image model renders any writing it sees in the prompt, so NEVER include phone or computer screens, monitors,
-  dashboards, signs, banners, posters, papers, documents, notebooks, handwriting, numbers, charts, QR codes,
-  banknotes, price tags, logos or brand names, and no recognisable real people. Show the idea through people,
-  hands, gestures, places, objects and light instead (e.g. "a vendor smiling as a customer holds up a phone to
-  pay, phone seen from behind", not "a phone screen showing a payment").
-- "motion" describes how the FIRST shot comes alive as a 5 second video: what moves (people walking, steam rising,
-  hands tapping a phone) and the camera move (slow dolly in, pan left). One sentence.
+- "shots" are 3 different photographs that illustrate that scene's narration, in order (wide, medium, close-up).
+  Each is ONE concrete image description: subject, action, setting with country/city and era, lighting, camera angle.
+  NEVER include screens, signs, posters, papers, maps, charts, writing, numbers, logos, brand names or real people.
+- "motion" describes how the FIRST shot comes alive as a 5 second video (what moves + camera move). One sentence.
 - Mark exactly the requested number of the most visually dynamic scenes with "hero": true.
 Return ONLY this JSON:
 {"title": "...", "logline": "one sentence", "scenes": [
-  {"narration": "...", "shots": ["...", "...", "...", "..."], "motion": "...", "hero": false}
+  {"narration": "...", "shots": ["...", "...", "..."], "motion": "...", "hero": false}
 ]}"""
 
+REEL_RULES = """This is a vertical short-form REEL. The first sentence must hook the viewer within 3 seconds
+(a surprising fact, a question or a bold claim). Use short punchy sentences, no slow introduction, and end with a
+line that makes people want to share it. The title must be at most 6 words."""
 
-def targets(seconds: int, scenes: int | None = None) -> tuple[int, int]:
+FACT_CHECK_PROMPT = """You are a meticulous fact-checker for a documentary channel.
+You receive the narration of each scene. Check every factual claim (dates, numbers, names, places, firsts, causes).
+- If a claim is wrong, correct it. If it is doubtful or unverifiable, soften it or remove that detail.
+- Keep the storytelling voice, the order and roughly the same length of every scene (within 10 percent).
+- Do not add new facts you are not certain of. Do not add citations.
+Return ONLY JSON: {"scenes": [{"narration": "..."}], "changes": ["one short note per correction"]}
+with exactly as many scenes as you received. If everything is accurate, return the narration unchanged and an
+empty "changes" list."""
+
+
+def targets(seconds: int, scenes: int | None = None, format: str | None = None) -> tuple[int, int]:
     """(number of scenes, total narration words) for a target length."""
-    n = scenes or config.default_scenes(seconds)
-    n = max(config.MIN_SCENES, min(config.MAX_SCENES, int(n)))
-    narration_seconds = max(10, seconds - 2 * config.CARD_SECONDS)
-    return n, int(narration_seconds * config.WORDS_PER_SECOND)
+    lo, hi = config.fmt(format)["scenes"]
+    n = int(scenes or config.default_scenes(seconds, format))
+    n = max(lo, min(hi, n))
+    return n, int(config.narration_seconds(seconds, format) * config.WORDS_PER_SECOND)
 
 
-def user_prompt(topic: str, seconds: int, heroes: int, scenes: int | None = None) -> str:
-    n, words = targets(seconds, scenes)
-    return (f"Topic: {topic}\n"
-            f"Length: about {seconds} seconds = about {words} words of narration in total.\n"
-            f"Write exactly {n} scenes of roughly {max(8, words // n)} words each.\n"
-            f"Mark {heroes} scenes as hero.")
+def user_prompt(brief: dict) -> str:
+    fmt = brief.get("format") or config.DEFAULT_FORMAT
+    n, words = targets(brief["seconds"], brief.get("scenes"), fmt)
+    tone = config.TONES.get(brief.get("tone") or "informative", config.TONES["informative"])
+    audience = config.AUDIENCES.get(brief.get("audience") or "general", config.AUDIENCES["general"])
+    lines = [f"Topic: {brief['topic']}",
+             f"Length: about {brief['seconds']} seconds = about {words} words of narration in total.",
+             f"Write exactly {n} scenes of roughly {max(8, words // n)} words each.",
+             f"Tone: {tone[1]}.", f"Audience: {audience[1]}.",
+             f"Mark {brief.get('heroes', 0)} scenes as hero."]
+    if brief.get("key_points"):
+        lines.append(f"The viewer asked you to cover these points (only if they are accurate): {brief['key_points']}")
+    if fmt == "reel":
+        lines.append(REEL_RULES)
+    return "\n".join(lines)
 
 
 def _clean(text: str) -> str:
@@ -108,8 +123,8 @@ def parse_json(text: str) -> dict:
 
 
 PREFERRED_MODELS = [  # first one that the Groq account can use wins
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
     "moonshotai/kimi-k2-instruct",
     "qwen/qwen3-32b",
@@ -136,13 +151,13 @@ def pick_model(client, log=print) -> str:
     return chat[0]
 
 
-def _complete(client, model, messages):
-    """One chat call. Reasoning models get low effort; JSON mode is dropped if the model rejects it."""
+def _complete(client, model, messages, temperature: float = 0.7, effort: str = "medium", max_tokens: int = 12000):
+    """One chat call. Reasoning models get an effort level; JSON mode is dropped if the model rejects it."""
     import openai
 
-    kwargs = dict(model=model, temperature=0.7, messages=messages, max_tokens=12000)
+    kwargs = dict(model=model, temperature=temperature, messages=messages, max_tokens=max_tokens)
     if "gpt-oss" in model or "qwen3" in model:
-        kwargs["extra_body"] = {"reasoning_effort": "medium" if "gpt-oss" in model else "none"}
+        kwargs["extra_body"] = {"reasoning_effort": effort if "gpt-oss" in model else "none"}
     try:
         return client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
     except openai.BadRequestError:
@@ -150,23 +165,39 @@ def _complete(client, model, messages):
         return client.chat.completions.create(**kwargs)
 
 
-def write_script(topic: str, seconds: int, heroes: int, log=print, scenes: int | None = None) -> dict:
-    from openai import OpenAI
+_LLM: dict = {}
 
-    key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("GROQ_API_KEY is missing - add it to the 'docugen-secrets' Modal secret.")
-    client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", max_retries=5, timeout=90)
-    model = pick_model(client, log)
-    log(f"Script model: {model} (Groq)")
-    n, words = targets(seconds, scenes)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt(topic, seconds, heroes, n)}]
-    last_err = None
+
+def llm(log=print):
+    """(client, model) - created once per process and shared by the writer, fact-checker and director."""
+    if "client" not in _LLM:
+        from openai import OpenAI
+
+        key = os.environ.get("GROQ_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError("GROQ_API_KEY is missing - add it to the 'docugen-secrets' Modal secret.")
+        client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", max_retries=6, timeout=120)
+        _LLM["client"], _LLM["model"] = client, pick_model(client, log)
+        log(f"LLM: {_LLM['model']} (Groq)")
+    return _LLM["client"], _LLM["model"]
+
+
+def chat_json(messages: list[dict], log=print, temperature: float = 0.7, effort: str = "medium",
+              max_tokens: int = 12000) -> dict:
+    client, model = llm(log)
+    resp = _complete(client, model, messages, temperature, effort, max_tokens)
+    return parse_json(resp.choices[0].message.content)
+
+
+def write_script(brief: dict, log=print) -> dict:
+    """brief: topic, seconds, scenes, heroes, format, tone, audience, key_points."""
+    n, words = targets(brief["seconds"], brief.get("scenes"), brief.get("format"))
+    heroes = int(brief.get("heroes", 0))
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt(brief)}]
+    last_err, script = None, None
     for attempt in range(1, 4):
         try:
-            resp = _complete(client, model, messages)
-            script = normalize(parse_json(resp.choices[0].message.content), topic, heroes, n)
+            script = normalize(chat_json(messages, log), brief["topic"], heroes, n)
             total = sum(len(s["narration"].split()) for s in script["scenes"])
             log(f"Script attempt {attempt}: {len(script['scenes'])} scenes, {total} words (target {words})")
             if total < words * 0.6 and attempt < 3:
@@ -178,9 +209,35 @@ def write_script(topic: str, seconds: int, heroes: int, log=print, scenes: int |
             last_err = exc
             log(f"Script attempt {attempt} invalid: {exc}")
             time.sleep(2)
-    if last_err:
+    if script is None:
         raise RuntimeError(f"The LLM did not return a usable script: {last_err}")
-    return script  # type: ignore[possibly-undefined]
+    return script
+
+
+def fact_check(script: dict, topic: str, log=print) -> list[str]:
+    """Second LLM pass that corrects or softens doubtful claims in place. Returns the list of changes."""
+    scenes = script["scenes"]
+    payload = {"topic": topic, "scenes": [{"narration": s["narration"]} for s in scenes]}
+    try:
+        data = chat_json([{"role": "system", "content": FACT_CHECK_PROMPT},
+                          {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                         log, temperature=0.2, effort="high")
+        fixed = data.get("scenes") if isinstance(data, dict) else None
+        if not isinstance(fixed, list) or len(fixed) != len(scenes):
+            raise ValueError("fact-checker changed the number of scenes")
+        applied = 0
+        for s, f in zip(scenes, fixed):
+            new = _clean(f.get("narration") if isinstance(f, dict) else "")
+            old_n, new_n = len(s["narration"].split()), len(new.split())
+            if new and new != s["narration"] and 0.6 * old_n <= new_n <= 1.4 * old_n:
+                s["narration"] = new[:900]
+                applied += 1
+        changes = [_clean(c)[:200] for c in (data.get("changes") or []) if isinstance(c, str) and _clean(c)]
+        log(f"Fact-check: {len(changes)} correction(s), {applied} scene(s) edited")
+        return changes[:12] if applied else []
+    except Exception as exc:  # the film can still be made; just say the check did not run
+        log(f"Fact-check skipped: {str(exc)[:160]}")
+        return []
 
 
 def to_markdown(script: dict) -> str:
