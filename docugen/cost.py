@@ -21,9 +21,9 @@ IDLE = {"voice": 45, "image": 30, "motion": 40}
 
 # measured on Modal and used for the up-front estimate
 ASSUME = {
-    "voice_gpu": "T4", "voice_load": 25.0, "voice_per_min": 6.0,
-    "image_gpu": "L40S", "image_load": 60.0, "image_each": 4.0,
-    "motion_gpu": "H200", "motion_load": 110.0, "motion_each": 45.0,
+    "voice_gpu": "T4", "voice_load": 15.0, "voice_per_min": 4.0,
+    "image_gpu": "L40S", "image_load": 30.0, "image_each": 6.0,
+    "motion_gpu": "H200", "motion_load": 60.0, "motion_each": 38.0,
     "cpu_base": 45.0, "cpu_per_shot": 1.6,
 }
 
