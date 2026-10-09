@@ -153,7 +153,8 @@ def run(params: dict, root: Path, backend: Backend, status: Status) -> bool:
         print(traceback.format_exc(), flush=True)
     st["seconds"] = round(time.time() - t_start, 1)
     try:
-        st["cost"] = cost.bill(backend.usage() if hasattr(backend, "usage") else {}, st["seconds"])
+        st["usage"] = backend.usage() if hasattr(backend, "usage") else {}
+        st["cost"] = cost.bill(st["usage"], st["seconds"])
     except Exception as exc:
         print("cost accounting skipped:", exc)
     if ok:

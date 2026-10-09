@@ -111,7 +111,7 @@ class VoiceGPU(_Meter):
 
 
 @app.cls(image=gpu_image, gpu=["L40S", "A100-40GB", "A100-80GB", "H100"], volumes={"/cache": cache_vol}, timeout=900,
-         scaledown_window=45, max_containers=MAX_IMAGE_GPUS, memory=32768)
+         scaledown_window=30, max_containers=MAX_IMAGE_GPUS, memory=32768)
 class ImageGPU(_Meter):
     @modal.enter()
     def load(self):
@@ -159,6 +159,16 @@ class MotionGPU(_Meter):
 
 
 # --------------------------------------------------------------------------- orchestrator
+def image_containers(images: int, render: str) -> int:
+    """GPU containers for the stills. Every container loads the model again (~1 min of paid GPU time), so economy
+    mode uses one container for up to 16 stills and two beyond that."""
+    from docugen import config
+
+    mode = config.RENDER_MODES.get(render, config.RENDER_MODES["economy"])
+    per = 16 if render == "economy" else 6
+    return max(1, min(mode["image_gpus"], -(-images // per)))
+
+
 class _Call:
     def __init__(self, future, meter):
         self.future, self.meter = future, meter
@@ -202,7 +212,7 @@ class ModalBackend:
 
         mode = config.RENDER_MODES.get(render, config.RENDER_MODES["economy"])
         self._warm.append(("voice", VoiceGPU().warm.spawn()))
-        for _ in range(max(1, min(mode["image_gpus"], -(-images // 6)))):
+        for _ in range(image_containers(images, render)):
             self._warm.append(("image", ImageGPU().warm.spawn()))
         for _ in range(min(mode["motion_gpus"], motions)):
             self._warm.append(("motion", MotionGPU().warm.spawn()))
@@ -228,7 +238,7 @@ class ModalBackend:
     def images(self, prompts, seeds, size, render="economy"):
         from docugen import config
 
-        workers = config.RENDER_MODES.get(render, config.RENDER_MODES["economy"])["image_gpus"]
+        workers = image_containers(len(prompts), render)
         w, h = size
 
         def one(args):

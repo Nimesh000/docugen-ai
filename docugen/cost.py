@@ -17,12 +17,12 @@ MEM_GIB_PRICE = 0.00000222        # per GiB per second
 ORCHESTRATOR_CORES, ORCHESTRATOR_GIB = 8.0, 8.0
 
 # scale-down windows used in modal_app.py (idle time that is still billed after the last call)
-IDLE = {"voice": 45, "image": 45, "motion": 40}
+IDLE = {"voice": 45, "image": 30, "motion": 40}
 
 # measured on Modal and used for the up-front estimate
 ASSUME = {
     "voice_gpu": "T4", "voice_load": 25.0, "voice_per_min": 6.0,
-    "image_gpu": "L40S", "image_load": 35.0, "image_each": 3.0,
+    "image_gpu": "L40S", "image_load": 60.0, "image_each": 4.0,
     "motion_gpu": "H200", "motion_load": 110.0, "motion_each": 45.0,
     "cpu_base": 45.0, "cpu_per_shot": 1.6,
 }
@@ -54,7 +54,8 @@ def estimate(params: dict) -> dict:
     stills = max(int(params.get("scenes") or 3), round(max(0.0, narr - heroes * config.MOTION_SECONDS) / shot))
     shots = stills + heroes
     a = ASSUME
-    img_containers = max(1, min(mode["image_gpus"], -(-stills // 6)))
+    per = 16 if (params.get("render") or "economy") == "economy" else 6
+    img_containers = max(1, min(mode["image_gpus"], -(-stills // per)))
     mot_containers = min(mode["motion_gpus"], heroes)
     voice = (a["voice_load"] + a["voice_per_min"] * narr / 60 + IDLE["voice"]) * GPU_PRICE[a["voice_gpu"]]
     images = (img_containers * (a["image_load"] + IDLE["image"]) + stills * a["image_each"]) * GPU_PRICE[a["image_gpu"]]

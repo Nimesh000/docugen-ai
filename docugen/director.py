@@ -35,7 +35,8 @@ new objects appearing, fast complex choreography, or text.
 YOUR JOB
 A) Read the whole narration and fix a VISUAL BIBLE: the era(s), real places, a 3-colour palette, the light, the
    recurring characters with a fixed physical description (age, build, clothing, hair; period-accurate), and one
-   recurring visual motif that ties the film together.
+   recurring visual motif that ties the film together. The motif is a real, photographable object or element
+   (a brass bell, a red scarf, monsoon rain), never graphics: no glowing lines, icons, holograms or UI overlays.
 B) For every scene, write exactly the requested number of shot prompts, in the order the narration is spoken, so each
    shot shows what the voice is saying at that moment.
 
@@ -103,10 +104,14 @@ FORBIDDEN = re.compile(
     r"whiteboards?|blackboards?|chalkboards?|handwriting|writing|written|text|caption|labels?|logos?|brand|"
     r"price tags?|banknotes?|bank notes?|currency notes?|receipts?|headlines?|slogans?|typography|inscriptions?|"
     r"numbers?|digits?|qr codes?)\b", re.I)
-SAFE_REPLACEMENTS = [  # last-resort sanitiser for anything the critic could not fix
-    (re.compile(r"\b(phone|smartphone|laptop|computer|tablet) (screen|display)\b", re.I), r"\1 seen from behind"),
-    (re.compile(r"\b(maps?|charts?|graphs?|diagrams?|documents?|papers?|newspapers?|books?|letters?|notebooks?|"
-                r"manuscripts?|scrolls?)\b", re.I), "tools"),
+SAFE_REPLACEMENTS = [  # last-resort sanitiser for anything the critic could not fix: swap for safe nouns
+    (re.compile(r"\b(phone|smartphone|laptop|computer|tablet)(?:'s)? (screens?|displays?|monitors?)\b", re.I), r"\1"),
+    (re.compile(r"\b(screens?|displays?|monitors?|dashboards?)\b", re.I), "device"),
+    (re.compile(r"\b(signs?|signage|signboards?|banners?|posters?|billboards?|placards?)\b", re.I), "stall awning"),
+    (re.compile(r"\b(maps?|charts?|graphs?|diagrams?|whiteboards?|blackboards?|chalkboards?)\b", re.I), "tool rack"),
+    (re.compile(r"\b(documents?|papers?|newspapers?|magazines?|books?|letters?|notebooks?|manuscripts?|scrolls?|"
+                r"receipts?)\b", re.I), "wooden crate"),
+    (re.compile(r"\b(banknotes?|bank notes?|currency notes?|price tags?|qr codes?|logos?|labels?)\b", re.I), "objects"),
     (FORBIDDEN, ""),
 ]
 
@@ -132,7 +137,7 @@ def lint(prompt: str, bible: dict | None = None) -> list[str]:
     bad = sorted({m.group(0).lower() for m in FORBIDDEN.finditer(prompt)})
     if bad:
         problems.append("mentions things that render as text: " + ", ".join(bad))
-    if not re.search(r"\b(1[0-9]{3}|20[0-9]{2}|[0-9]{1,2}(st|nd|rd|th) century|ancient|medieval|prehistoric|"
+    if not re.search(r"\b(1[0-9]{3}s?|20[0-9]{2}s?|[0-9]{1,2}(st|nd|rd|th).century|ancient|medieval|prehistoric|"
                      r"modern|present.day|today|contemporary|era|age|period|bc|bce|ad|ce)\b", prompt, re.I):
         problems.append("no era or year")
     return problems
