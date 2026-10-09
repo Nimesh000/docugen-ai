@@ -18,7 +18,7 @@ def test_lint_and_sanitize():
     problems = director.lint(bad)
     assert any("render as text" in p for p in problems) and any("short" in p for p in problems)
     clean = director.sanitize(bad)
-    assert not director.FORBIDDEN.search(clean) and "seen from behind" in clean
+    assert not director.FORBIDDEN.search(clean) and "phone" in clean
 
 
 def test_plan_counts_follow_format():
